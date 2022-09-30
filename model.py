@@ -159,13 +159,13 @@ class TriangleModel(torch.nn.Module):
         else:
            s2p_lesion = 1
         
-        if orthography_mask:
-            phonology_mask = 1
-            semantics_mask = 1
-
         if phonology_mask and semantics_mask:
             phonology_mask = 0
             semantics_mask = 0
+	
+        if orthography_mask:
+            phonology_mask = 1
+            semantics_mask = 1
 
         data_list = [semantics,phonology,orthography]
         for idx,data in enumerate(data_list):
