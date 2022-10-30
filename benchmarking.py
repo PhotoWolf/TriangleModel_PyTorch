@@ -1,35 +1,32 @@
 import torch
 from dataset import Monosyllabic_Dataset
-from model import ModelConfig,st_clamp
+from model import ModelConfig
 from train import train_loop
 import pickle
 
-dataset = Monosyllabic_Dataset('df_train.csv','phonetic_features.txt','sem_train.npz')
+
+torch.manual_seed(0)
+torch.autograd.set_detect_anomaly(True)
+
+dataset = Monosyllabic_Dataset('datasets/monosyllabic/df_train.csv',
+                                  'datasets/phonetic_features.txt',
+                                  'datasets/monosyllabic/sem_train.npz')
 
 if torch.cuda.is_available():
     device = torch.device('cuda:0')
 else: 
     device = torch.device('cpu')
 
-loader = torch.utils.data.DataLoader(dataset,shuffle=True,batch_size=10)
+loader = torch.utils.data.DataLoader(dataset,shuffle=True,batch_size=10,drop_last=True)
 
-config = ModelConfig(orth_dim=110,phon_dim=250,sem_dim=2446, init_states=False)
-model = config.create_model([lambda x: x, lambda x: x]).to(device)
+torch.manual_seed(0)
+config = ModelConfig(orth_dim=110,phon_dim=250,sem_dim=2446)
+model = config.create_model(lesions=['o2p']).to(device)
 
-opts = [torch.optim.AdamW(list(model.cleanup['state_to_hidden'].parameters())+
-                           list(model.cleanup['hidden_to_state'].parameters())+
-                           list(model.default_hidden['cleanup'].parameters()),1e-2),
-        torch.optim.AdamW(list(model.phonology_semantics['state_to_hidden'].parameters())
-                            +list(model.phonology_semantics['hidden_to_state'].parameters())
-                            +list(model.default_hidden['phonology_semantics'].parameters())
-                            +list(model.default_inputs.parameters())
-                            +list(model.cleanup['state_to_hidden'].parameters())
-                            +list(model.cleanup['hidden_to_state'].parameters())
-                            +list(model.default_hidden['cleanup'].parameters()),1e-2),
-        torch.optim.AdamW(list(model.orthography_indirect['state_to_hidden'].parameters())
-                            +list(model.orthography_indirect['hidden_to_state'].parameters())
-                            +list(model.orthography_direct['phonology'].parameters())
-                            +list(model.default_hidden['orthography'].parameters()),1e-2)]
+current_epoch = 0
+if current_epoch:
+   model.load_state_dict(torch.load(f'ckpts/no_o2p_{current_epoch-10}'))
 
-losses,accuracy = train_loop('phase_1_phon',model,opts,loader,[1,0,0],device,num_epochs=300,zer=.1,lesions=['o2s','p2s','s2p'])
-losses,accuracy = train_loop('phase_2_phon',model,opts,loader,[0,0,1],device,num_epochs=300,zer=.1,lesions=['o2s','p2s','s2p'])
+opt = torch.optim.AdamW(model.parameters(),1e-3)
+losses,accuracy = train_loop('baseline',model,opt,loader,device,num_epochs=500,
+                                 current_epoch=current_epoch,zer=.1)
