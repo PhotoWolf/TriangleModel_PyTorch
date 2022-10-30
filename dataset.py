@@ -1,4 +1,5 @@
 import torch
+import pickle
 import pandas as pd
 import numpy as np
 
@@ -8,7 +9,7 @@ class SlotTokenizer:
         slots = {slot:{} for slot in range(num_slots)}
         for word in data_list:
             for idx,char in enumerate(word):
-                if char is '_':
+                if char == '_':
                     continue;
                 if slots[idx].get(char,False) is False:
                     slots[idx][char] = len(slots[idx])
@@ -34,7 +35,7 @@ class SlotTokenizer:
                                                                         )
                 marker += len(self.embedding_table.columns)
             else:
-                if char is not '_':
+                if char != '_':
                     embedding[marker + self.slots[idx][char]] = 1 
                 marker += len(self.slots[idx])
         return embedding
@@ -46,11 +47,25 @@ class Monosyllabic_Dataset(torch.utils.data.Dataset):
 
         data = pd.read_csv(path_to_words).drop_duplicates()
         self.orthography = data['ort']
-        self.orthography_tokenizer = SlotTokenizer(self.orthography)
+        try:
+           raise ValueError;
+           with open('orthography_tokenizer.pkl','rb') as f:
+                self.orthography_tokenizer = pickle.load(f)
+        except:
+           self.orthography_tokenizer = SlotTokenizer(self.orthography)
+           with open('orthography_tokenizer.pkl','wb') as f:
+                pickle.dump(self.orthography_tokenizer,f)
 
         self.phonology = data['pho']
         phon_mapping = pd.read_csv(path_to_phon_mapping,sep="\t",header=None).set_index(0)
-        self.phonology_tokenizer = SlotTokenizer(self.phonology,phon_mapping)
+        try:
+           raise ValueError;
+           with open('phonology_tokenizer.pkl','rb') as f:
+                self.phonology_tokenizer = pickle.load(f)
+        except:
+           self.phonology_tokenizer = SlotTokenizer(self.phonology,phon_mapping)
+           with open('phonology_tokenizer.pkl','wb') as f:
+                pickle.dump(self.phonology_tokenizer,f)
 
         semantics = torch.FloatTensor(np.load(path_to_sem)['data'])
         self.semantics = semantics[:,(semantics==0).any(dim=0)]
