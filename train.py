@@ -6,9 +6,10 @@ import tqdm.auto as tqdm
 BOUND = 15
 
 def invert_binary(x):
-    x[x==1] = BOUND
-    x[x==0] = -BOUND
-    return x
+    nx = x.clone()
+    nx[nx==1] = BOUND
+    nx[nx==0] = -BOUND
+    return nx
 
 def create_inputs(model,batch_size,device,**kwargs):
     if kwargs.get('orthography',None) is not None:
@@ -39,12 +40,16 @@ def create_inputs(model,batch_size,device,**kwargs):
 
 def forward_euler(f,x_0,t_0,T,delta_t):
     outputs,x = [x_0],x_0
-    for t in torch.arange(t_0,T,delta_t):
+    for t in torch.arange(0,T,delta_t):
         derivatives = f(x)
+        nx = {}
         for key in x:
-            x[key] = x[key] + delta_t * derivatives[key]
-            x[key] = torch.clamp(x[key],-BOUND,BOUND)
-        outputs.append(x)
+            if t<t_0 and key in ['phonology','semantics']:
+               nx[key] = x[key]
+            nx[key] = x[key] + delta_t * derivatives[key]
+            nx[key] = torch.clamp(nx[key],-BOUND,BOUND)
+        outputs.append(nx)
+        x = nx
     return outputs
 
 def collate_outputs(outputs):
@@ -58,6 +63,7 @@ def collate_outputs(outputs):
         else:
            semantics = torch.cat((semantics,S),dim=0)
            phonology = torch.cat((phonology,P),dim=0)
+
     return phonology,semantics
 # +
 def compute_phon_accuracy(preds,targets,embedding_matrix,k=2):
@@ -80,17 +86,28 @@ def cross_entropy(preds,targets,zer,eps=1e-4):
     cross_entropy = cross_entropy - (1-targets) * (1 + eps - preds).log()
     return (mask * cross_entropy).sum(dim=(-1,-2))/(eps + mask.sum(dim=(-1,-2)))
 
-def train_loop(ID,model,opt,loader,device,num_epochs=250,current_epoch=0,zer=0.1):
+def train_loop(ID,model,opt,loader,device,num_steps=10e4,current_step=0,zer=0.1,**kwargs):
     accuracy,losses = [],[]
-    if current_epoch:
-       accuracy = torch.load(f'metrics/{ID}_accuracy')
-       losses = torch.load(f'metrics/{ID}_losses')
+    if current_step != 0:
+       try:
+          accuracy = torch.load(f'metrics/{ID}_accuracy')
+          losses = torch.load(f'metrics/{ID}_losses')
+       except:
+          pass;
 
-    pbar = tqdm.tqdm(range(current_epoch,current_epoch + num_epochs),position=0)
-    for epoch in pbar:
-        if epoch%10 == 0:
-           torch.save(model.state_dict(),f'ckpts/{ID}_{epoch}')
-           torch.save(opt.state_dict(),f'ckpts/{ID}_{epoch}_opt')
+    t_0 = kwargs.get('t_0',0)
+    T = kwargs.get('T',4)
+    delta_t = kwargs.get('delta_t',1/3)
+
+    start_error = kwargs.get('start_error',2)
+
+    clamp_p = kwargs.get('clamp_p',False)
+    clamp_s = kwargs.get('clamp_s',False)
+
+    for step in range(current_step,current_step + num_steps):
+        if step%5000 == 0:
+           torch.save(model.state_dict(),f'ckpts/{ID}_{step}')
+           torch.save(opt.state_dict(),f'ckpts/{ID}_{step}_opt')
         for idx,batch in enumerate(loader):
             orthography,phonology,semantics = batch['orthography'].to(device),\
                                               batch['phonology'].to(device),\
@@ -98,16 +115,27 @@ def train_loop(ID,model,opt,loader,device,num_epochs=250,current_epoch=0,zer=0.1
 
             batch_size = orthography.shape[0]
 
-            x_0 = create_inputs(model,batch_size,device,orthography=orthography)
+            if clamp_p and clamp_s:
+               x_0 = create_inputs(model,batch_size,device,orthography = orthography,
+                                      phonology = phonology, semantics = semantics)
+            elif clamp_p:
+               x_0 = create_inputs(model,batch_size,device,orthography = orthography,
+                                      phonology = phonology)
+            elif clamp_s:
+               x_0 = create_inputs(model,batch_size,device,orthography = orthography,
+                                      semantics = semantics)
+            else:
+               x_0 = create_inputs(model,batch_size,device,orthography=orthography)
 
             predicted_phonology,predicted_semantics = collate_outputs(
-                                                          forward_euler(model,x_0,0,4,1/3)
+                                                          forward_euler(model,x_0,t_0,T,delta_t)
                                                        )
-            phonology_loss = cross_entropy(predicted_phonology[2::],phonology[None],zer)
-            semantics_loss = cross_entropy(predicted_semantics[2::],semantics[None],zer)
+
+            phonology_loss = cross_entropy(predicted_phonology[start_error::],phonology[None],zer)
+            semantics_loss = cross_entropy(predicted_semantics[start_error::],semantics[None],zer)
 
             weighting = torch.arange(1,phonology_loss.shape[0]+1,device=device)
-            weighting = weighting/weighting.sum()
+            weighting = weighting/weighting[-1]
 
             phonology_loss = (weighting * phonology_loss).sum()
             semantics_loss = (weighting * semantics_loss).sum()
@@ -129,7 +157,8 @@ def train_loop(ID,model,opt,loader,device,num_epochs=250,current_epoch=0,zer=0.1
                         for t in [.4,.5,.6]]
              
             accuracy.append([p_acc,s_acc])
-        print(np.mean(accuracy[-len(loader)::],axis=0),np.mean(losses[-len(loader)::],axis=0))
+            break;
+
         torch.save(losses,f'metrics/{ID}_losses')
         torch.save(accuracy,f'metrics/{ID}_accuracy')
 
