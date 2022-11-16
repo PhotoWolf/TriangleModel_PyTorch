@@ -52,7 +52,6 @@ class TriangleModel(torch.nn.Module):
         self.phon_2_sem_dim,self.sem_2_phon_dim = phon_2_sem_dim,sem_2_phon_dim
         self.orth_2_sem_dim,self.orth_2_phon_dim = orth_2_sem_dim,orth_2_phon_dim
 
-        print(self.orth_2_sem_dim)
         self.cleanup = torch.nn.ModuleDict({'state_to_hidden':torch.nn.ModuleDict({
                                         'semantics':TimeAveragedInputs(sem_dim,sem_cleanup_dim,learn_bias),
                                         'phonology':TimeAveragedInputs(phon_dim,phon_cleanup_dim,learn_bias)}),
@@ -113,21 +112,37 @@ class TriangleModel(torch.nn.Module):
         else:
            s2p_lesion = 1
 
+        if 's2s' in self.lesions:
+           s2s_lesion = 0
+        else:
+           s2s_lesion = 1
+
+        if 'p2p' in self.lesions:
+           p2p_lesion = 0
+        else:
+           p2p_lesion = 1
+
+        a_p = p2p_lesion + s2p_lesion + 2 * o2p_lesion
+        a_s = s2s_lesion + p2s_lesion + 2 * o2s_lesion
+
         ### Compute gradient of phonology state w.r.t time
-        phon_gradient = self.cleanup['hidden_to_state']['phonology'](cleanup_phon,phonology)
+        phon_gradient = p2p_lesion * self.cleanup['hidden_to_state']['phonology'](cleanup_phon,phonology)
         phon_gradient = phon_gradient + s2p_lesion * self.phonology_semantics['hidden_to_state']['phonology'](
                                                                     sem_2_phon,phonology
                                                                )
         phon_gradient = phon_gradient + o2p_lesion * (self.orthography_direct['phonology'](orthography,phonology) \
                                + self.orthography_indirect['hidden_to_state']['phonology'](orth_2_phon,phonology))
+        phon_gradient = phon_gradient + max([0,1-a_p]) * phonology
 
+#        print(phon_gradient.abs().max())
         ### Compute gradient of semantic state w.r.t time
-        sem_gradient = self.cleanup['hidden_to_state']['semantics'](cleanup_sem,semantics)
+        sem_gradient = s2s_lesion * self.cleanup['hidden_to_state']['semantics'](cleanup_sem,semantics)
         sem_gradient = sem_gradient + p2s_lesion * self.phonology_semantics['hidden_to_state']['semantics'](
                                                                     phon_2_sem,semantics
                                                                )
         sem_gradient = sem_gradient + o2s_lesion * (self.orthography_direct['semantics'](orthography,semantics) \
                                + self.orthography_indirect['hidden_to_state']['semantics'](orth_2_sem,semantics))
+        sem_gradient = sem_gradient + max([0,1-a_s]) * semantics
 
         ### Compute gradient of cleanup units w.r.t time
         cleanup_phon_gradient = self.cleanup['state_to_hidden']['phonology'](phonology,cleanup_phon)
