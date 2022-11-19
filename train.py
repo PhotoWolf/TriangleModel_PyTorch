@@ -6,7 +6,7 @@ import tqdm.auto as tqdm
 BOUND = 15
 
 def invert_binary(tensor):
-    new_tensor = BOUND * torch.ones_like(tensor)
+    new_tensor = BOUND * torch.ones_like(tensor,device=tensor.device)
     new_tensor[tensor == 0] = -BOUND
     return new_tensor
 
@@ -56,12 +56,32 @@ class Metrics:
         sem_accuracy = [self.compute_sem_accuracy(semantics_preds,semantics_targets,tau) for tau  in self.tau]
         return phon_accuracy,sem_accuracy
 
+class TrainerConfig:
+    def __init__(self,**kwargs):
+        self.params = kwargs
+        
+    @classmethod
+    def from_json(cls,json_path):
+        config_params = json.load(open(json_path,'r'))
+        return cls(**config_params)
+        
+    def create_trainer(self,phoneme_embedding_matrix):
+        if self.params.get('solver','forward_euler') is 'forward_euler':
+            solver = forward_euler
+        else:
+            raise ValueError('Supported solvers include: forward_euler')
+        return Trainer(solver,phoneme_embedding_matrix,self.params.get('zer',.1))
+    
 class Trainer:
-    def __init__(self,solver,phoneme_embedding_matrix,device,zer = .1):
+    def __init__(self,solver,phoneme_embedding_matrix,zer):
 
         self.solver = solver
         self.metrics = Metrics(phoneme_embedding_matrix.to(device),[1,2,3],[.4,.5,.6])
         self.zer = zer
+        self.device = torch.device('cpu')
+        
+    def to(self,device):
+        assert isinstance(device,torch.device)
         self.device = device
 
     def cross_entropy(self,preds,targets,zer,eps=1e-4):
@@ -133,7 +153,10 @@ class Trainer:
         predicted_phonology,predicted_semantics = self.collate_outputs(outputs)
 
         if targets is None:
-           return predicted_phonology,predicted_semantics
+           if kwargs.get('return_outputs',False):
+              return outputs
+           else:
+              return predicted_phonology,predicted_semantics
 
         else: 
             phonology = targets['phonology']
