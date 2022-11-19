@@ -130,7 +130,7 @@ if __name__ == '__main__':
        device = torch.device('cpu')
 
     trainer = trainer_config.create_trainer(phoneme_embeddings).to(device)
-    model = config.create_model().to(device)
+    model = model_config.create_model().to(device)
 
     if args.initial_step:
        ckpt_path = glob.glob(f'ckpts/*{args.ID}_{args.initial_step}')[0]
