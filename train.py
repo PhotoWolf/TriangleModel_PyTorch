@@ -5,38 +5,10 @@ import tqdm.auto as tqdm
 
 BOUND = 15
 
-def invert_binary(x):
-    nx = x.clone()
-    nx[nx==1] = BOUND
-    nx[nx==0] = -BOUND
-    return nx
-
-def create_inputs(model,batch_size,device,**kwargs):
-    if kwargs.get('orthography',None) is not None:
-       x_0 = {'orthography':invert_binary(kwargs['orthography'])}
-    else:
-       x_0 = {'orthography':-BOUND * torch.ones((batch_size,model.orth_dim),device=device)}
-    
-    if kwargs.get('phonology',None) is not None:
-       x_0['phonology'] = invert_binary(kwargs['phonology'])
-    else:
-       x_0['phonology'] = -BOUND * torch.ones((batch_size,model.phon_dim),device=device)
-              
-    if kwargs.get('semantics',None) is not None:
-       x_0['semantics'] = invert_binary(kwargs['semantics'])
-    else:
-       x_0['semantics'] = -BOUND * torch.ones((batch_size,model.sem_dim),device=device)
-              
-    x_0['cleanup_phon'] = -BOUND * torch.ones((batch_size,model.phon_cleanup_dim),device=device)
-    x_0['cleanup_sem'] = -BOUND * torch.ones((batch_size,model.sem_cleanup_dim),device=device)
-
-    x_0['sem_2_phon'] = -BOUND * torch.ones((batch_size,model.sem_2_phon_dim),device=device)
-    x_0['phon_2_sem'] = -BOUND * torch.ones((batch_size,model.phon_2_sem_dim),device=device)
-
-    x_0['orth_2_phon'] = -BOUND * torch.ones((batch_size,model.orth_2_phon_dim),device=device)
-    x_0['orth_2_sem'] = -BOUND * torch.ones((batch_size,model.orth_2_sem_dim),device=device)
-              
-    return x_0
+def invert_binary(tensor):
+    new_tensor = BOUND * torch.ones_like(tensor)
+    new_tensor[tensor == 0] = -BOUND
+    return new_tensor
 
 def forward_euler(f,x_0,t_0,T,delta_t):
     outputs,x = [x_0],x_0
@@ -52,114 +24,142 @@ def forward_euler(f,x_0,t_0,T,delta_t):
         x = nx
     return outputs
 
-def collate_outputs(outputs):
-    for idx,output in enumerate(outputs):
-        S = torch.sigmoid(output['semantics'])[None]
-        P = torch.sigmoid(output['phonology'])[None]
 
-        if idx == 0:
-           semantics = S
-           phonology = P
-        else:
-           semantics = torch.cat((semantics,S),dim=0)
-           phonology = torch.cat((phonology,P),dim=0)
+class Metrics:
+    def __init__(self,phoneme_embedding_matrix,k=[1],tau=[.5]):
+        self.phoneme_embedding_matrix = phoneme_embedding_matrix
+        self.k = k
+        self.tau = tau
+  
+    def compute_phon_accuracy(self,preds,targets,k):
+        preds = preds.view(preds.shape[0],-1,1,self.phoneme_embedding_matrix.shape[-1])
+        targets = targets.view(targets.shape[0],-1,1,self.phoneme_embedding_matrix.shape[-1])
 
-    return phonology,semantics
-# +
-def compute_phon_accuracy(preds,targets,embedding_matrix,k=2):
-    preds = preds.view(preds.shape[0],-1,1,embedding_matrix.shape[-1])
-    targets = targets.view(targets.shape[0],-1,1,embedding_matrix.shape[-1])
+        pred_distances = (preds - self.phoneme_embedding_matrix[None,None]).norm(dim=-1)
+        target_distances = (targets - self.phoneme_embedding_matrix[None,None]).norm(dim=-1)
 
-    pred_distances = (preds - embedding_matrix[None,None]).norm(dim=-1)
-    target_distances = (targets - embedding_matrix[None,None]).norm(dim=-1)
+        vals = (target_distances.argmin(dim=-1,keepdim=True) == pred_distances.argsort(dim=-1)[:,:,:k]).any(dim=-1)
+        return vals.all(dim=-1).float().mean()
 
-    vals = (target_distances.argmin(dim=-1,keepdim=True) == pred_distances.argsort(dim=-1)[:,:,:k]).any(dim=-1)
-    return vals.all(dim=-1).float().mean()
 
-def compute_sem_accuracy(preds,targets,threshold=.5):
-    return ((preds>=threshold) == targets.bool()).all(dim=-1).float().mean()
+    def compute_sem_accuracy(self,preds,targets,tau):
+        return ((preds>=tau) == targets.bool()).all(dim=-1).float().mean()
 
-def cross_entropy(preds,targets,zer,eps=1e-4):
-    mask = ((targets-preds).abs()>=zer).float()
+    def __call__(self,preds,targets):
+        phonology_preds = preds['phonology']
+        phonology_targets = targets['phonology']
 
-    cross_entropy = -targets * (eps + preds).log()
-    cross_entropy = cross_entropy - (1-targets) * (1 + eps - preds).log()
-    return (mask * cross_entropy).sum(dim=(-1,-2))/(eps + mask.sum(dim=(-1,-2)))
+        semantics_preds = preds['semantics']
+        semantics_targets = targets['semantics']
 
-def train_loop(ID,model,opt,loader,device,num_steps=10e4,current_step=0,zer=0.1,**kwargs):
-    accuracy,losses = [],[]
-    if current_step != 0:
-       try:
-          accuracy = torch.load(f'metrics/{ID}_accuracy')
-          losses = torch.load(f'metrics/{ID}_losses')
-       except:
-          pass;
+        phon_accuracy = [self.compute_phon_accuracy(phonology_preds,phonology_targets,k) for k in self.k]
+        sem_accuracy = [self.compute_sem_accuracy(semantics_preds,semantics_targets,tau) for tau  in self.tau]
+        return phon_accuracy,sem_accuracy
 
-    t_0 = kwargs.get('t_0',0)
-    T = kwargs.get('T',4)
-    delta_t = kwargs.get('delta_t',1/3)
+class Trainer:
+    def __init__(self,solver,phoneme_embedding_matrix,device,zer = .1):
 
-    start_error = kwargs.get('start_error',2)
+        self.solver = solver
+        self.metrics = Metrics(phoneme_embedding_matrix.to(device),[1,2,3],[.4,.5,.6])
+        self.zer = zer
+        self.device = device
 
-    clamp_p = kwargs.get('clamp_p',False)
-    clamp_s = kwargs.get('clamp_s',False)
+    def cross_entropy(self,preds,targets,zer,eps=1e-4):
+        mask = ((targets-preds).abs()>=zer).float()
 
-    for step in range(current_step,current_step + num_steps):
-        if step%5000 == 0:
-           torch.save(model.state_dict(),f'ckpts/{ID}_{step}')
-           torch.save(opt.state_dict(),f'ckpts/{ID}_{step}_opt')
-        for idx,batch in enumerate(loader):
-            orthography,phonology,semantics = batch['orthography'].to(device),\
-                                              batch['phonology'].to(device),\
-                                              batch['semantics'].to(device)
+        cross_entropy = -targets * (eps + preds).log()
+        cross_entropy = cross_entropy - (1-targets) * (1 + eps - preds).log()
+        return (mask * cross_entropy).sum(dim=(-1,-2))/(eps + mask.sum(dim=(-1,-2)))
 
-            batch_size = orthography.shape[0]
+    def collate_outputs(self,outputs):
+       for idx,output in enumerate(outputs):
+           S = torch.sigmoid(output['semantics'])[None]
+           P = torch.sigmoid(output['phonology'])[None]
 
-            if clamp_p and clamp_s:
-               x_0 = create_inputs(model,batch_size,device,orthography = orthography,
-                                      phonology = phonology, semantics = semantics)
-            elif clamp_p:
-               x_0 = create_inputs(model,batch_size,device,orthography = orthography,
-                                      phonology = phonology)
-            elif clamp_s:
-               x_0 = create_inputs(model,batch_size,device,orthography = orthography,
-                                      semantics = semantics)
+           if idx == 0:
+              semantics = S
+              phonology = P
+           else:
+              semantics = torch.cat((semantics,S),dim=0)
+              phonology = torch.cat((phonology,P),dim=0)
+
+       return phonology,semantics
+ 
+    def create_inputs(self,model,data):
+       temp = torch.zeros((0,))
+#       print(data)
+       batch_size = max([
+                        data.get('orthography',temp).shape[0],
+                        data.get('phonology',temp).shape[0],
+                        data.get('semantics',temp).shape[0],
+                    ])
+
+       if data.get('orthography',None) is not None:
+          inputs = {'orthography':invert_binary(data['orthography'])}
+       else:
+          inputs = {'orthography':-BOUND * torch.ones((batch_size,model.orth_dim),device=self.device)}
+
+       if data.get('phonology',None) is not None:
+          inputs['phonology'] = invert_binary(data['phonology'])
+       else:
+          inputs['phonology'] = -BOUND * torch.ones((batch_size,model.phon_dim),device=self.device)
+
+       if data.get('semantics',None) is not None:
+          inputs['semantics'] = invert_binary(data['semantics'])
+       else:
+          inputs['semantics'] = -BOUND * torch.ones((batch_size,model.sem_dim),device=self.device)
+
+       inputs['cleanup_phon'] = -BOUND * torch.ones((batch_size,model.phon_cleanup_dim),device=self.device)
+       inputs['cleanup_sem'] = -BOUND * torch.ones((batch_size,model.sem_cleanup_dim),device=self.device)
+
+       inputs['sem_2_phon'] = -BOUND * torch.ones((batch_size,model.sem_2_phon_dim),device=self.device)
+       inputs['phon_2_sem'] = -BOUND * torch.ones((batch_size,model.phon_2_sem_dim),device=self.device)
+
+       inputs['orth_2_phon'] = -BOUND * torch.ones((batch_size,model.orth_2_phon_dim),device=self.device)
+       inputs['orth_2_sem'] = -BOUND * torch.ones((batch_size,model.orth_2_sem_dim),device=self.device)
+
+       return inputs
+
+    def run(self,model,inputs,targets=None,opt=None,**kwargs):
+
+        start_error = kwargs.get('start_error',2)
+        delta_t = kwargs.get('delta_t',1/3)
+        t_0 = kwargs.get('t_0',0)
+        T = kwargs.get('T',4)
+
+        inputs = self.create_inputs(model,inputs)
+        outputs = self.solver(model,inputs,t_0,T,delta_t)
+        
+        predicted_phonology,predicted_semantics = self.collate_outputs(outputs)
+
+        if targets is None:
+           return predicted_phonology,predicted_semantics
+
+        else: 
+            phonology = targets['phonology']
+            semantics = targets['semantics']
+ 
+            p_acc,s_acc = self.metrics(
+                          {'phonology':predicted_phonology[-1],'semantics':predicted_semantics[-1]},
+                          targets)
+
+            if opt is None:
+               return None,None,p_acc,s_acc
+
             else:
-               x_0 = create_inputs(model,batch_size,device,orthography=orthography)
+               phonology_loss = self.cross_entropy(predicted_phonology[start_error::],phonology[None],self.zer)
+               semantics_loss = self.cross_entropy(predicted_semantics[start_error::],semantics[None],self.zer)
 
-            predicted_phonology,predicted_semantics = collate_outputs(
-                                                          forward_euler(model,x_0,t_0,T,delta_t)
-                                                       )
+               weighting = torch.arange(1,phonology_loss.shape[0]+1,device=self.device)
+               weighting = weighting/weighting[-1]
 
-            phonology_loss = cross_entropy(predicted_phonology[start_error::],phonology[None],zer)
-            semantics_loss = cross_entropy(predicted_semantics[start_error::],semantics[None],zer)
+               phonology_loss = (weighting * phonology_loss).sum()
+               semantics_loss = (weighting * semantics_loss).sum()
 
-            weighting = torch.arange(1,phonology_loss.shape[0]+1,device=device)
-            weighting = weighting/weighting[-1]
+               loss = phonology_loss + semantics_loss
+               loss.backward()
 
-            phonology_loss = (weighting * phonology_loss).sum()
-            semantics_loss = (weighting * semantics_loss).sum()
+               opt.step()
+               opt.zero_grad()
 
-            losses.append([phonology_loss.item(),semantics_loss.item()])
-            loss = phonology_loss + semantics_loss
-
-            loss.backward()
-            opt.step()
-            opt.zero_grad()
-
-            embedding_table = torch.Tensor(loader.dataset.phonology_tokenizer.embedding_table.to_numpy())
-            embedding_table = embedding_table.to(device)
-
-            with torch.no_grad():
-                p_acc = [compute_phon_accuracy(predicted_phonology[-1],phonology,embedding_table,k).item()
-                        for k in [1,2,3]]
-                s_acc = [compute_sem_accuracy(predicted_semantics[-1],semantics,t).item()
-                        for t in [.4,.5,.6]]
-             
-            accuracy.append([p_acc,s_acc])
-            break;
-
-        torch.save(losses,f'metrics/{ID}_losses')
-        torch.save(accuracy,f'metrics/{ID}_accuracy')
-
-    return losses,accuracy
+               return phonology_loss,semantics_loss,p_acc,s_acc
