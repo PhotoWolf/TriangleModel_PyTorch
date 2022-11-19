@@ -4,3 +4,4 @@ A modular PyTorch implementation of the Triangle Model [(Harm and Seidenberg, 20
 - *train.py*: Training utilities and ODE solver.
 - *benchmark.py*: Runs phased training procedure. Saves losses / accuracies.
 - *dataset.py*: Data utilities and tokenizer class.
+- *evaluation.py*: Runs evaluation pipeline. Plots results.
