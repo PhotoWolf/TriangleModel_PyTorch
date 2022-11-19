@@ -24,13 +24,16 @@ def forward_euler(f,x_0,t_0,T,delta_t):
         x = nx
     return outputs
 
-
 class Metrics:
     def __init__(self,phoneme_embedding_matrix,k=[1],tau=[.5]):
         self.phoneme_embedding_matrix = phoneme_embedding_matrix
         self.k = k
         self.tau = tau
   
+    def to(self,device):
+        assert isinstance(device,torch.device)
+        self.phoneme_embedding_matrix.to(device)
+
     def compute_phon_accuracy(self,preds,targets,k):
         preds = preds.view(preds.shape[0],-1,1,self.phoneme_embedding_matrix.shape[-1])
         targets = targets.view(targets.shape[0],-1,1,self.phoneme_embedding_matrix.shape[-1])
@@ -66,7 +69,7 @@ class TrainerConfig:
         return cls(**config_params)
         
     def create_trainer(self,phoneme_embedding_matrix):
-        if self.params.get('solver','forward_euler') is 'forward_euler':
+        if self.params.get('solver','forward_euler') == 'forward_euler':
             solver = forward_euler
         else:
             raise ValueError('Supported solvers include: forward_euler')
@@ -76,13 +79,14 @@ class Trainer:
     def __init__(self,solver,phoneme_embedding_matrix,zer):
 
         self.solver = solver
-        self.metrics = Metrics(phoneme_embedding_matrix.to(device),[1,2,3],[.4,.5,.6])
+        self.metrics = Metrics(phoneme_embedding_matrix,[1,2,3],[.4,.5,.6])
         self.zer = zer
         self.device = torch.device('cpu')
         
     def to(self,device):
         assert isinstance(device,torch.device)
         self.device = device
+        self.metrics.to(device)
 
     def cross_entropy(self,preds,targets,zer,eps=1e-4):
         mask = ((targets-preds).abs()>=zer).float()
