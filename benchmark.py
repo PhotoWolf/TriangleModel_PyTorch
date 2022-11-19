@@ -8,10 +8,10 @@ import glob
 import numpy as np
 from dataset import Monosyllabic_Dataset
 from model import ModelConfig
-from train import Trainer,forward_euler
+from train import Trainer,forward_euler,TrainerConfig
 
-def run_cleanup(trainer,model,opt,data):
-    model.lesions = ['o2s','o2p','p2s','s2p']
+def run_p2p(trainer,model,opt,data):
+    model.lesions = ['o2s','o2p','p2s','s2p','s2s']
 
     start_error = -4
     t_0 = 2 + 2/3
@@ -27,7 +27,26 @@ def run_cleanup(trainer,model,opt,data):
               }
 
     phon_loss,sem_loss,phon_acc,sem_acc = trainer.run(model,inputs,opt=opt,targets=targets)
-    return (phon_loss,sem_loss),(phon_acc,sem_acc)
+    return phon_loss,phon_acc
+
+def run_s2s(trainer,model,opt,data):
+    model.lesions = ['o2s','o2p','p2s','s2p','p2p']
+
+    start_error = -4
+    t_0 = 2 + 2/3
+
+    inputs = {
+                'phonology':data['phonology'].to(trainer.device),
+                'semantics':data['semantics'].to(trainer.device),
+              }
+    
+    targets = {
+                'phonology':data['phonology'].to(trainer.device),
+                'semantics':data['semantics'].to(trainer.device),
+              }
+
+    phon_loss,sem_loss,phon_acc,sem_acc = trainer.run(model,inputs,opt=opt,targets=targets)
+    return sem_loss,sem_acc
 
 def run_sem_2_phon(trainer,model,opt,data):
     model.lesions = ['o2s','o2p','p2s','s2s']
@@ -70,6 +89,8 @@ def run_full(trainer,model,opt,data):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
+    parser.add_argument('-ID',type=str,default='')
+    
     parser.add_argument('-initial_step',type=int,default=0)
     parser.add_argument('-phase_1_steps',type=int,default=175000)
     parser.add_argument('-phase_2_steps',type=int,default=55000)
@@ -98,34 +119,32 @@ if __name__ == '__main__':
 
     sample_loader = torch.utils.data.DataLoader(sample_dataset,shuffle=True,batch_size=10,drop_last=True)
     no_sample_loader = torch.utils.data.DataLoader(no_sample_dataset,shuffle=True,batch_size=10,drop_last=False)
+    phoneme_embeddings = torch.Tensor(sample_dataset.phonology_tokenizer.embedding_table.to_numpy())
 
-    config = ModelConfig(orth_dim=110,phon_dim=250,sem_dim=2446,learn_bias=False)
+    model_config = ModelConfig(orth_dim=110,phon_dim=250,sem_dim=2446,learn_bias=False)
+    trainer_config = TrainerConfig()
 
     if torch.cuda.is_available():
        device = torch.device('cuda:0')
     else: 
        device = torch.device('cpu')
 
-    phoneme_embeddings = torch.Tensor(sample_dataset.phonology_tokenizer.embedding_table.to_numpy())
-    trainer = Trainer(forward_euler,phoneme_embeddings,device)
+    trainer = trainer_config.create_trainer(phoneme_embeddings).to(device)
     model = config.create_model().to(device)
 
     if args.initial_step:
-       ckpt_path = glob.glob(f'ckpts/*_{args.initial_step}')[0]
+       ckpt_path = glob.glob(f'ckpts/*{args.ID}_{args.initial_step}')[0]
        model.load_state_dict(torch.load(ckpt_path))
 
     opt1 = torch.optim.AdamW(
-                       list(model.cleanup['state_to_hidden']['semantics'].parameters()) +\
-                       list(model.cleanup['hidden_to_state']['semantics'].parameters()) +\
                        list(model.cleanup['state_to_hidden']['phonology'].parameters()) +\
                        list(model.cleanup['hidden_to_state']['phonology'].parameters()),
-                       5e-3,weight_decay=0)
+                       5e-3,weight_decay=0
+                       )
 
     opt2 = torch.optim.AdamW(
                        list(model.cleanup['state_to_hidden']['semantics'].parameters()) +\
-                       list(model.cleanup['hidden_to_state']['semantics'].parameters()) +\
-                       list(model.phonology_semantics['state_to_hidden']['phonology'].parameters()) +\
-                       list(model.phonology_semantics['hidden_to_state']['semantics'].parameters()),
+                       list(model.cleanup['hidden_to_state']['semantics'].parameters()),
                        5e-3,weight_decay=0)
 
     opt3 = torch.optim.AdamW(
@@ -133,6 +152,13 @@ if __name__ == '__main__':
                        list(model.cleanup['hidden_to_state']['phonology'].parameters()) +\
                        list(model.phonology_semantics['state_to_hidden']['semantics'].parameters()) +\
                        list(model.phonology_semantics['hidden_to_state']['phonology'].parameters()),
+                       5e-3,weight_decay=0)
+
+    opt4 = torch.optim.AdamW(
+                       list(model.cleanup['state_to_hidden']['semantics'].parameters()) +\
+                       list(model.cleanup['hidden_to_state']['semantics'].parameters()) +\
+                       list(model.phonology_semantics['state_to_hidden']['phonology'].parameters()) +\
+                       list(model.phonology_semantics['hidden_to_state']['semantics'].parameters()),
                        5e-3,weight_decay=0)
 
     ### Phase 1
@@ -150,39 +176,43 @@ if __name__ == '__main__':
         for data in sample_loader:
             break;
 
-        if random.random() < .1:
-           losses,accs = run_cleanup(trainer,model,opt1,data)
+        if random.random() < .2:
+           if random.random() < .5:
+              losses,accs = run_p2p(trainer,model,opt1,data)
 
-           p2p_loss.append(losses[0].item())
-           p2p_acc.append([a.item() for a in accs[0]])
+              p2p_loss.append(losses.item())
+              p2p_acc.append([a.item() for a in accs])
 
-           np.save('metrics/train_p2p_loss',p2p_loss)
-           np.save('metrics/train_p2p_acc',p2p_acc)
+              np.save(f'metrics/{args.ID}_train_p2p_loss',p2p_loss)
+              np.save(f'metrics/{args.ID}_train_p2p_acc',p2p_acc)
 
-           s2s_loss.append(losses[1].item())
-           s2s_acc.append([a.item() for a in accs[1]])
+           else:
+              losses,accs = run_s2s(trainer,model,opt2,data)
 
-           np.save('metrics/train_s2s_loss',s2s_loss)
-           np.save('metrics/train_s2s_acc',s2s_acc)
+              s2s_loss.append(losses.item())
+              s2s_acc.append([a.item() for a in accs])
+
+              np.save(f'metrics/{args.ID}_train_s2s_loss',s2s_loss)
+              np.save(f'metrics/{args.ID}_train_s2s_acc',s2s_acc)
 
         else:
            if random.random() < .5:
-              loss,acc = run_sem_2_phon(trainer,model,opt2,data)
+              loss,acc = run_sem_2_phon(trainer,model,opt3,data)
 
               s2p_loss.append(loss.item())
               s2p_acc.append([a.item() for a in acc])
 
-              np.save('metrics/train_s2p_loss',s2p_loss)
-              np.save('metrics/train_s2p_acc',s2p_acc)
+              np.save(f'metrics/{args.ID}_train_s2p_loss',s2p_loss)
+              np.save(f'metrics/{args.ID}_train_s2p_acc',s2p_acc)
 
            else:
-              loss,acc = run_phon_2_sem(trainer,model,opt3,data)
+              loss,acc = run_phon_2_sem(trainer,model,opt4,data)
 
               p2s_loss.append(loss.item())
               p2s_acc.append([a.item() for a in acc])
 
-              np.save('metrics/train_p2s_loss',p2s_loss)
-              np.save('metrics/train_p2s_acc',p2s_acc)
+              np.save(f'metrics/{args.ID}_train_p2s_loss',p2s_loss)
+              np.save(f'metrics/{args.ID}_train_p2s_acc',p2s_acc)
 
         if (current_step+1)%(1e2) == 0:
 
@@ -195,19 +225,19 @@ if __name__ == '__main__':
             print(current_step)
 
             try:
-               print(np.array(np.load('metrics/train_p2p_acc.npy'))[-int(1e2)::].mean(axis=0))
+               print(np.array(np.load(f'metrics/{args.ID}_train_p2p_acc.npy'))[-int(1e2)::].mean(axis=0))
             except:
                print(None)
             try:
-               print(np.array(np.load('metrics/train_s2s_acc.npy'))[-int(1e2)::].mean(axis=0))
+               print(np.array(np.load(f'metrics/{args.ID}_train_s2s_acc.npy'))[-int(1e2)::].mean(axis=0))
             except:
                print(None)
 
-            print(np.array(np.load('metrics/train_s2p_acc.npy'))[-int(1e2)::].mean(axis=0))
-            print(np.array(np.load('metrics/train_p2s_acc.npy'))[-int(1e2)::].mean(axis=0))
+            print(np.array(np.load(f'metrics/{args.ID}_train_s2p_acc.npy'))[-int(1e2)::].mean(axis=0))
+            print(np.array(np.load(f'metrics/{args.ID}_train_p2s_acc.npy'))[-int(1e2)::].mean(axis=0))
             
         if (current_step+1)%(args.phase_1_ckpt_interval) == 0:
-            torch.save(model.state_dict(),'ckpts/phase_1_{current_step}.pth')
+            torch.save(model.state_dict(),f'ckpts/phase_1_{args.ID}_{current_step}.pth')
             
         if (current_step+1)%(args.phase_1_eval_interval) == 0:
             all_s2p_acc,all_p2s_acc = 3 * [0], 3 * [0]
@@ -232,8 +262,8 @@ if __name__ == '__main__':
 
             last_val = True
             
-            np.save('metrics/eval_s2p_acc',eval_s2p_acc)
-            np.save('metrics/eval_p2s_acc',eval_p2s_acc)
+            np.save(f'metrics/{args.ID}_eval_s2p_acc',eval_s2p_acc)
+            np.save(f'metrics/{args.ID}_eval_p2s_acc',eval_p2s_acc)
             
     ### Phase 2
     opt = torch.optim.AdamW(
@@ -255,11 +285,11 @@ if __name__ == '__main__':
 
         losses,accs = run_full(trainer,model,opt,data)
 
-        np.save('metrics/train_o2p_loss',losses[0])
-        np.save('metrics/train_o2p_acc',accs[0])
+        np.save(f'metrics/{args.ID}_train_o2p_loss',losses[0])
+        np.save(f'metrics/{args.ID}_train_o2p_acc',accs[0])
 
-        np.save('metrics/train_o2s_loss',losses[1])
-        np.save('metrics/train_o2s_acc',accs[1])
+        np.save(f'metrics/{args.ID}_train_o2s_loss',losses[1])
+        np.save(f'metrics/{args.ID}_train_o2s_acc',accs[1])
 
         if (current_step+1)%(1e2) == 0:
             if last_val:
@@ -270,11 +300,11 @@ if __name__ == '__main__':
 
             print(current_step)
 
-            print(np.array(np.load('metrics/train_o2p_acc.npy'))[-int(1e2)::].mean(axis=0))
-            print(np.array(np.load('metrics/train_o2s_acc.npy'))[-int(1e2)::].mean(axis=0))
+            print(np.array(np.load(f'metrics/{args.ID}_train_o2p_acc.npy'))[-int(1e2)::].mean(axis=0))
+            print(np.array(np.load(f'metrics/{args.ID}_train_o2s_acc.npy'))[-int(1e2)::].mean(axis=0))
             
         if (current_step+1)%(args.phase_2_ckpt_interval) == 0:
-            torch.save(model.state_dict(),'ckpts/phase_2_{current_step}.pth')
+            torch.save(model.state_dict(),f'ckpts/phase_2_{args.ID}_{current_step}.pth')
             
         if (current_step+1)%(args.phase_2_eval_interval) == 0:
             all_o2p_acc,all_o2s_acc = 0,0
@@ -295,5 +325,5 @@ if __name__ == '__main__':
 
             last_val = True            
 
-            np.save('metrics/eval_o2p_acc',eval_o2p_acc)
-            np.save('metrics/eval_o2s_acc',eval_o2s_acc)
+            np.save(f'metrics/{args.ID}_eval_o2p_acc',eval_o2p_acc)
+            np.save(f'metrics/{args.ID}_eval_o2s_acc',eval_o2s_acc)
