@@ -32,7 +32,8 @@ class Metrics:
   
     def to(self,device):
         assert isinstance(device,torch.device)
-        self.phoneme_embedding_matrix.to(device)
+        self.phoneme_embedding_matrix = self.phoneme_embedding_matrix.to(device)
+        return self
 
     def compute_phon_accuracy(self,preds,targets,k):
         preds = preds.view(preds.shape[0],-1,1,self.phoneme_embedding_matrix.shape[-1])
@@ -87,6 +88,7 @@ class Trainer:
         assert isinstance(device,torch.device)
         self.device = device
         self.metrics.to(device)
+        return self
 
     def cross_entropy(self,preds,targets,zer,eps=1e-4):
         mask = ((targets-preds).abs()>=zer).float()
