@@ -5,3 +5,9 @@ A lightweight PyTorch implementation of the Triangle Model [(Harm and Seidenberg
 - *benchmark.py*: Runs phased training procedure. Saves losses / accuracies.
 - *dataset.py*: Data utilities and tokenizer class.
 - *evaluation.py*: Runs evaluation pipeline. Plots results.
+
+To run the default set of experiments,
+```
+python3 -u benchmarking.py
+python3 -u evaluation.py
+```
