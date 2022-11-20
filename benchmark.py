@@ -8,7 +8,7 @@ import glob
 import numpy as np
 from dataset import Monosyllabic_Dataset
 from model import ModelConfig
-from train import Trainer,forward_euler,TrainerConfig
+from train import forward_euler,TrainerConfig
 
 def run_p2p(trainer,model,opt,data):
     model.lesions = ['o2s','o2p','p2s','s2p','s2s']
@@ -285,11 +285,17 @@ if __name__ == '__main__':
 
         losses,accs = run_full(trainer,model,opt,data)
 
-        np.save(f'metrics/{args.ID}_train_o2p_loss',losses[0])
-        np.save(f'metrics/{args.ID}_train_o2p_acc',accs[0])
+        o2p_loss.append(losses[0].item())
+        o2p_acc.append([a.item() for a in accs[0]])
 
-        np.save(f'metrics/{args.ID}_train_o2s_loss',losses[1])
-        np.save(f'metrics/{args.ID}_train_o2s_acc',accs[1])
+        np.save(f'metrics/{args.ID}_train_o2p_loss',o2p_loss)
+        np.save(f'metrics/{args.ID}_train_o2p_acc',o2p_acc)
+
+        o2s_loss.append(losses[1].item())
+        o2s_acc.append([a.item() for a in accs[1]])
+
+        np.save(f'metrics/{args.ID}_train_o2s_loss',o2s_loss)
+        np.save(f'metrics/{args.ID}_train_o2s_acc',o2s_acc)
 
         if (current_step+1)%(1e2) == 0:
             if last_val:
@@ -307,13 +313,14 @@ if __name__ == '__main__':
             torch.save(model.state_dict(),f'ckpts/phase_2_{args.ID}_{current_step}.pth')
             
         if (current_step+1)%(args.phase_2_eval_interval) == 0:
-            all_o2p_acc,all_o2s_acc = 0,0
+            all_o2p_acc,all_o2s_acc = 3 * [0], 3 * [0]
             for data in no_sample_loader:
-                _,_,acc1,acc2 = run_full(trainer,model,None,data)
+                _,accs = run_full(trainer,model,None,data)
+                phon_acc,sem_acc = accs[0],accs[1]
                 
-                for jdx,a in enumerate(acc1):
-                   all_o2p_acc[jdx] += data['phonology'].shape[0] * a
-                   all_o2s_acc[jdx] += data['semantics'].shape[0] * acc2[jdx]
+                for jdx,acc in enumerate(phon_acc):
+                   all_o2p_acc[jdx] += data['phonology'].shape[0] * acc
+                   all_o2s_acc[jdx] += data['semantics'].shape[0] * sem_acc[jdx]
 
             eval_o2p_acc.append([a.item()/len(no_sample_dataset) for a in all_o2p_acc])
             eval_o2s_acc.append([a.item()/len(no_sample_dataset) for a in all_o2s_acc])
