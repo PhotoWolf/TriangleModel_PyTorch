@@ -1,4 +1,5 @@
 import torch
+import json
 from dataclasses import dataclass
 
 @dataclass()
@@ -19,6 +20,11 @@ class ModelConfig:
     orth_2_sem_dim : int = 500
     orth_2_phon_dim : int = 100
 
+    @classmethod
+    def from_json(cls,json_path):
+        config_params = json.load(open(json_path,'r'))
+        return cls(**config_params)
+        
     def create_model(self,lesions=[]):
         return TriangleModel(self.orth_dim,self.phon_dim,self.sem_dim,
                                 self.phon_cleanup_dim,self.sem_cleanup_dim,
