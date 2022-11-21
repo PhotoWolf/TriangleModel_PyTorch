@@ -151,7 +151,7 @@ class TriangleModel(torch.nn.Module):
         if s2s_lesion:
            sem_gradient = s2s_lesion * self.cleanup['hidden_to_state']['semantics'](cleanup_sem,semantics,a_s)
 
-        if s2p_lesion:
+        if p2s_lesion:
            sem_gradient = sem_gradient + p2s_lesion * self.phonology_semantics['hidden_to_state']['semantics'](
                                                                     phon_2_sem,semantics,a_s
                                                                )
