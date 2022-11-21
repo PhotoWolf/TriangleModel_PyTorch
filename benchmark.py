@@ -55,6 +55,7 @@ def run_sem_2_phon(trainer,model,opt,data):
     model.lesions = ['o2s','o2p','p2s','s2s']
 
     start_error = -3
+    t_0 = 0
 
     inputs = {'semantics':data['semantics'].to(trainer.device)}
     targets = {
@@ -70,6 +71,7 @@ def run_phon_2_sem(trainer,model,opt,data):
     model.lesions = ['o2s','o2p','s2p','p2p']
 
     start_error = -3
+    t_0 = 0
 
     inputs = {'phonology':data['phonology'].to(trainer.device)}
     targets = {
@@ -84,6 +86,7 @@ def run_phon_2_sem(trainer,model,opt,data):
 def run_full(trainer,model,opt,data):
     model.lesions = []
     start_error = 2
+    t_0 = 0
 
     inputs = {'orthography':data['orthography'].to(trainer.device)}
     targets = {
