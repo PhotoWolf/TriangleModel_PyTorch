@@ -177,7 +177,7 @@ class TriangleModel(torch.nn.Module):
         if p2s_lesion:
            phon_2_sem_gradient = self.phonology_semantics['state_to_hidden']['phonology'](phonology,phon_2_sem,1)
 
-        if s2p_lesion
+        if s2p_lesion:
            sem_2_phon_gradient = self.phonology_semantics['state_to_hidden']['semantics'](semantics,sem_2_phon,1)
 
         ### Compute gradient of orth indirect units w.r.t time
