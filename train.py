@@ -4,6 +4,7 @@ import numpy as np
 import tqdm.auto as tqdm
 
 BOUND = 15
+INIT_VALUE = 0
 
 def invert_binary(tensor):
     new_tensor = BOUND * torch.ones_like(tensor,device=tensor.device)
@@ -123,26 +124,26 @@ class Trainer:
        if data.get('orthography',None) is not None:
           inputs = {'orthography':invert_binary(data['orthography'])}
        else:
-          inputs = {'orthography':-BOUND * torch.ones((batch_size,model.orth_dim),device=self.device)}
+          inputs = {'orthography':-INIT_VALUE * torch.ones((batch_size,model.orth_dim),device=self.device)}
 
        if data.get('phonology',None) is not None:
           inputs['phonology'] = invert_binary(data['phonology'])
        else:
-          inputs['phonology'] = -BOUND * torch.ones((batch_size,model.phon_dim),device=self.device)
+          inputs['phonology'] = -INIT_VALUE * torch.ones((batch_size,model.phon_dim),device=self.device)
 
        if data.get('semantics',None) is not None:
           inputs['semantics'] = invert_binary(data['semantics'])
        else:
-          inputs['semantics'] = -BOUND * torch.ones((batch_size,model.sem_dim),device=self.device)
+          inputs['semantics'] = -INIT_VALUE * torch.ones((batch_size,model.sem_dim),device=self.device)
 
-       inputs['cleanup_phon'] = -BOUND * torch.ones((batch_size,model.phon_cleanup_dim),device=self.device)
-       inputs['cleanup_sem'] = -BOUND * torch.ones((batch_size,model.sem_cleanup_dim),device=self.device)
+       inputs['cleanup_phon'] = -INIT_VALUE * torch.ones((batch_size,model.phon_cleanup_dim),device=self.device)
+       inputs['cleanup_sem'] = -INIT_VALUE * torch.ones((batch_size,model.sem_cleanup_dim),device=self.device)
 
-       inputs['sem_2_phon'] = -BOUND * torch.ones((batch_size,model.sem_2_phon_dim),device=self.device)
-       inputs['phon_2_sem'] = -BOUND * torch.ones((batch_size,model.phon_2_sem_dim),device=self.device)
+       inputs['sem_2_phon'] = -INIT_VALUE * torch.ones((batch_size,model.sem_2_phon_dim),device=self.device)
+       inputs['phon_2_sem'] = -INIT_VALUE * torch.ones((batch_size,model.phon_2_sem_dim),device=self.device)
 
-       inputs['orth_2_phon'] = -BOUND * torch.ones((batch_size,model.orth_2_phon_dim),device=self.device)
-       inputs['orth_2_sem'] = -BOUND * torch.ones((batch_size,model.orth_2_sem_dim),device=self.device)
+       inputs['orth_2_phon'] = -INIT_VALUE * torch.ones((batch_size,model.orth_2_phon_dim),device=self.device)
+       inputs['orth_2_sem'] = -INIT_VALUE * torch.ones((batch_size,model.orth_2_sem_dim),device=self.device)
 
        return inputs
 
