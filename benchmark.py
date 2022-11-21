@@ -26,7 +26,8 @@ def run_p2p(trainer,model,opt,data):
                 'semantics':data['semantics'].to(trainer.device),
               }
 
-    phon_loss,sem_loss,phon_acc,sem_acc = trainer.run(model,inputs,opt=opt,targets=targets)
+    phon_loss,sem_loss,phon_acc,sem_acc = trainer.run(model,inputs,opt=opt,targets=targets,
+                                                      start_error = start_error, t_0 = t_0)
     return phon_loss,phon_acc
 
 def run_s2s(trainer,model,opt,data):
@@ -45,7 +46,9 @@ def run_s2s(trainer,model,opt,data):
                 'semantics':data['semantics'].to(trainer.device),
               }
 
-    phon_loss,sem_loss,phon_acc,sem_acc = trainer.run(model,inputs,opt=opt,targets=targets)
+    phon_loss,sem_loss,phon_acc,sem_acc = trainer.run(model,inputs,opt=opt,targets=targets,
+                                                      start_error = start_error, t_0 = t_0)
+
     return sem_loss,sem_acc
 
 def run_sem_2_phon(trainer,model,opt,data):
@@ -58,7 +61,9 @@ def run_sem_2_phon(trainer,model,opt,data):
                 'phonology':data['phonology'].to(trainer.device),
                 'semantics':data['semantics'].to(trainer.device),
               }
-    loss,_,acc,_ = trainer.run(model,inputs,opt=opt,targets=targets)
+    loss,_,acc,_ = trainer.run(model,inputs,opt=opt,targets=targets,
+                               start_error = start_error, t_0 = t_0)
+
     return loss,acc
 
 def run_phon_2_sem(trainer,model,opt,data):
@@ -71,7 +76,9 @@ def run_phon_2_sem(trainer,model,opt,data):
                 'phonology':data['phonology'].to(trainer.device),
                 'semantics':data['semantics'].to(trainer.device),
               }
-    _,loss,_,acc = trainer.run(model,inputs,opt=opt,targets=targets)
+    _,loss,_,acc = trainer.run(model,inputs,opt=opt,targets=targets,
+                               start_error = start_error, t_0 = t_0)
+
     return loss,acc
 
 def run_full(trainer,model,opt,data):
@@ -83,7 +90,9 @@ def run_full(trainer,model,opt,data):
                 'phonology':data['phonology'].to(trainer.device),
                 'semantics':data['semantics'].to(trainer.device),
               }
-    phon_loss,sem_loss,phon_acc,sem_acc = trainer.run(model,inputs,opt=opt,targets=targets)
+    phon_loss,sem_loss,phon_acc,sem_acc = trainer.run(model,inputs,opt=opt,targets=targets,
+                                                      start_error = start_error, t_0 = t_0)
+
     return (phon_loss,sem_loss),(phon_acc,sem_acc)
 
 if __name__ == '__main__':
@@ -92,7 +101,7 @@ if __name__ == '__main__':
     parser.add_argument('-ID',type=str,default='')
     
     parser.add_argument('-initial_step',type=int,default=0)
-    parser.add_argument('-phase_1_steps',type=int,default=175000)
+    parser.add_argument('-phase_1_steps',type=int,default=105000)
     parser.add_argument('-phase_2_steps',type=int,default=55000)
     
     parser.add_argument('-phase_1_eval_interval',type=int,default=5000)
@@ -139,27 +148,27 @@ if __name__ == '__main__':
     opt1 = torch.optim.AdamW(
                        list(model.cleanup['state_to_hidden']['phonology'].parameters()) +\
                        list(model.cleanup['hidden_to_state']['phonology'].parameters()),
-                       5e-3,weight_decay=0
+                       1e-2,weight_decay=0
                        )
 
     opt2 = torch.optim.AdamW(
                        list(model.cleanup['state_to_hidden']['semantics'].parameters()) +\
                        list(model.cleanup['hidden_to_state']['semantics'].parameters()),
-                       5e-3,weight_decay=0)
+                       1e-2,weight_decay=0)
 
     opt3 = torch.optim.AdamW(
                        list(model.cleanup['state_to_hidden']['phonology'].parameters()) +\
                        list(model.cleanup['hidden_to_state']['phonology'].parameters()) +\
                        list(model.phonology_semantics['state_to_hidden']['semantics'].parameters()) +\
                        list(model.phonology_semantics['hidden_to_state']['phonology'].parameters()),
-                       5e-3,weight_decay=0)
+                       1e-2,weight_decay=0)
 
     opt4 = torch.optim.AdamW(
                        list(model.cleanup['state_to_hidden']['semantics'].parameters()) +\
                        list(model.cleanup['hidden_to_state']['semantics'].parameters()) +\
                        list(model.phonology_semantics['state_to_hidden']['phonology'].parameters()) +\
                        list(model.phonology_semantics['hidden_to_state']['semantics'].parameters()),
-                       5e-3,weight_decay=0)
+                       1e-2,weight_decay=0)
 
     ### Phase 1
     p2p_acc,p2p_loss = [],[]
@@ -269,7 +278,7 @@ if __name__ == '__main__':
     opt = torch.optim.AdamW(
                           list(model.orthography_indirect.parameters())+
                           list(model.orthography_direct.parameters()),
-                      5e-3,weight_decay=0.0)
+                      1e-2,weight_decay=0.0)
 
     o2p_loss,o2p_acc = [],[]
     o2s_loss,o2s_acc = [],[]
