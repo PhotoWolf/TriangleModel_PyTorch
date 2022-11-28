@@ -8,6 +8,6 @@ A lightweight PyTorch implementation of the Triangle Model [(Harm and Seidenberg
 
 To run the default set of experiments,
 ```
-python3 -u benchmaking.py -ID baseline -model_config configs/baseline/model_config.json -trainer_config configs/baseline/trainer_config.json -optimizer_config configs/baseline/opt_config.json
+python3 benchmaking.py -ID baseline -model_config configs/baseline/model_config.json -trainer_config configs/baseline/trainer_config.json -optimizer_config configs/baseline/opt_config.json
 python3 evaluation.py -ID baseline -model_config configs/baseline/model_config.json -trainer_config configs/baseline/trainer_config.json
 ```
