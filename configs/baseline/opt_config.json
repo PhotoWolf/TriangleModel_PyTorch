@@ -1,0 +1,17 @@
+{
+"lr":{
+   "phon":5e-3,
+   "sem":5e-3,
+   "prod":5e-3,
+   "comp":5e-3,
+   "read":5e-3
+   },
+"weight_decay":{
+   "phon":0.0,
+   "sem":0.0,
+   "prod":0.0,
+   "comp":0.0,
+   "read":0.0
+   }
+
+}
