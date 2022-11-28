@@ -1,0 +1,6 @@
+{
+ "orth_dim":110,
+ "phon_dim":250,
+ "sem_dim":2446,
+ "learn_bias":"True"
+}
