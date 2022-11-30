@@ -77,7 +77,7 @@ def plot_performance(ID : str):
     plt.title('Orthography -> Semantics');
     
     plt.savefig(f'figures/{ID}/orthography.png')
-    plt.close(fig)
+    plt.close('all')
 
 def plot_taraban(results : np.array ,filename : str):
     '''
@@ -115,7 +115,7 @@ def plot_taraban(results : np.array ,filename : str):
     plt.xticks([0,1],['Low Frq','High Frq']);
     
     plt.savefig(f'{filename}_median.png')
-    plt.close(fig)
+    plt.close('all')
     
 def eval_taraban(ckpts : List[str], model : TriangleModel,trainer : Trainer):
     '''
@@ -145,7 +145,8 @@ def eval_taraban(ckpts : List[str], model : TriangleModel,trainer : Trainer):
        model.eval()
         
        ID = ckpt.split('/')[1]
-       os.makedirs(f'figures/{ID}/taraban',exist_ok=True)
+       step = ckpt.split('/')[-1].replace('.pth','')
+       os.makedirs(f'figures/{ID}/taraban/{step}',exist_ok=True)
        with torch.no_grad():
            ### Iterate over starting timestep for SSE
            for start_step in range(2,12):
@@ -159,7 +160,7 @@ def eval_taraban(ckpts : List[str], model : TriangleModel,trainer : Trainer):
                    results.append([frq[idx],con[idx],sse])
                     
                results = np.array(results)
-               plot_taraban(results,f'figures/{ID}/taraban/{start_step}')
+               plot_taraban(results,f'figures/{ID}/taraban/{step}/{start_step}')
              
                 
 def plot_strain(results : np.array, filename : str):
@@ -210,7 +211,7 @@ def plot_strain(results : np.array, filename : str):
     plt.xticks([0,1],['Low Frq','High Frq']);
     
     plt.savefig(f'{filename}_median.png')
-    plt.close(fig)
+    plt.close('all')
     
 def eval_strain(ckpts : List[str], model : TriangleModel, trainer : Trainer):
     '''
@@ -240,7 +241,8 @@ def eval_strain(ckpts : List[str], model : TriangleModel, trainer : Trainer):
        model.eval()
         
        ID = ckpt.split('/')[1]
-       os.makedirs(f'figures/{ID}/strain',exist_ok=True)
+       step = ckpt.split('/')[-1].replace('.pth','')
+       os.makedirs(f'figures/{ID}/strain/{step}',exist_ok=True)
        with torch.no_grad():
            ### Iterate over starting timestep for SSE
            for start_step in range(2,12):
@@ -254,7 +256,7 @@ def eval_strain(ckpts : List[str], model : TriangleModel, trainer : Trainer):
                    results.append([frq[idx],con[idx],img[idx],sse])
                     
                results = np.array(results)
-               plot_strain(results,f'figures/{ID}/strain/{start_step}')
+               plot_strain(results,f'figures/{ID}/strain/{step}/{start_step}')
 
     
 def plot_glushko(results : np.array, filename : str):
@@ -279,7 +281,7 @@ def plot_glushko(results : np.array, filename : str):
     plt.xticks([0,1],['Ambiguous','Unambiguous']);
     
     plt.savefig(f'{filename}.png')
-    plt.close(fig)    
+    plt.close('all')    
 
 def eval_glushko(ckpts : List[str], model : TriangleModel, trainer : Trainer):
     '''
@@ -307,6 +309,7 @@ def eval_glushko(ckpts : List[str], model : TriangleModel, trainer : Trainer):
        model.eval()
         
        ID = ckpt.split('/')[1]
+       step = ckpt.split('/')[-1].replace('.pth','')
        os.makedirs(f'figures/{ID}/glushko',exist_ok=True)
        with torch.no_grad():
               results = []
@@ -323,7 +326,7 @@ def eval_glushko(ckpts : List[str], model : TriangleModel, trainer : Trainer):
                    results.append([cond[idx],short_acc,long_acc])
 
               results = np.array(results)
-              plot_glushko(results,f'figures/{ID}/glushko.png')
+              plot_glushko(results,f'figures/{ID}/glushko/{step}')
     
 def plot_development(results : np.array, filename : str):
     '''
@@ -352,7 +355,7 @@ def plot_development(results : np.array, filename : str):
 
     plt.legend();
     plt.savefig(f'{filename}.png')
-    plt.close(fig)    
+    plt.close('all')    
 
 def eval_development(ckpts : List[str], model : TriangleModel, trainer : Trainer):
     '''
@@ -373,6 +376,7 @@ def eval_development(ckpts : List[str], model : TriangleModel, trainer : Trainer
        model.eval()
         
        ID = ckpt.split('/')[1]
+       step = ckpt.split('/')[-1].replace('.pth','')
        os.makedirs(f'figures/{ID}/development',exist_ok=True)        
        for data in dataset:
            with torch.no_grad():
@@ -401,7 +405,7 @@ def eval_development(ckpts : List[str], model : TriangleModel, trainer : Trainer
        results = np.stack([values['p2s'],values['s2s'],
                            values['s2p'],values['p2p'],
                            values['o2p'],values['o2s']])
-       plot_development(results,f'figures/{ID}/development')
+       plot_development(results,f'figures/{ID}/development/{step}')
         
 if __name__=='__main__':
    parser = argparse.ArgumentParser()
