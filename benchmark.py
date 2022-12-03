@@ -16,6 +16,9 @@ if __name__ == '__main__':
     
     ### We save ckpts,metrics,etc. under .../[ID]/...
     parser.add_argument('-ID',type=str,default='baseline')
+
+    parser.add_argument('-batch_size',type=int,default=10)
+    parser.add_argument('-dataset',type=str,default='jason')
     
     ### Paths to model/trainer/optimizer hyperparameters
     parser.add_argument('-model_config',type=str,default='')
@@ -28,7 +31,7 @@ if __name__ == '__main__':
     parser.add_argument('-phase_1_initial_step',type=int,default=0)
     parser.add_argument('-phase_1_steps',type=int,default=175000)
     parser.add_argument('-phase_2_initial_step',type=int,default=0)
-    parser.add_argument('-phase_2_steps',type=int,default=55000)
+    parser.add_argument('-phase_2_steps',type=int,default=125000)
     
     ### Sets evaluation and checkpointing intervals for training phase 1
     ### (i.e, oral learning tasks)
@@ -38,7 +41,10 @@ if __name__ == '__main__':
     ### Sets evaluation and checkpointing intervals for training phase 2
     ### (i.e, reading tasks)
     parser.add_argument('-phase_2_eval_interval',type=int,default=1000)
-    parser.add_argument('-phase_2_ckpt_interval',type=int,default=1000)
+    parser.add_argument('-phase_2_ckpt_interval',type=int,default=5000)
+
+    ### During phase 1 of training, freeze weights at H&S, 04 performance
+    parser.add_argument('-early_stopping',type=bool,default=False)
     
     args = parser.parse_args()
     
@@ -52,15 +58,21 @@ if __name__ == '__main__':
     ### Load in dataset w/ and w/o frequency sampling. The former is used 
     ### for training and the latter for evaluation.
     ### TODO: Add support for Chang et. al, 2020 data
-    sample_dataset = Monosyllabic_Dataset('datasets/JasonLo/df_train.csv',
-                                   'datasets/JasonLo/phonetic_features.txt',
-                                   'datasets/JasonLo/sem_train.npz')
-    no_sample_dataset = Monosyllabic_Dataset('datasets/JasonLo/df_train.csv',
-                                   'datasets/JasonLo/phonetic_features.txt',
-                                   'datasets/JasonLo/sem_train.npz',
+
+    if args.dataset == 'jason':
+       train = 'datasets/JasonLo/df_train.csv'
+       phon_features = 'datasets/JasonLo/phonetic_features.txt'
+       sem = 'datasets/JasonLo/sem_train.npz'
+    elif args.dataset == 'chang':
+       train = 'datasets/Chang2020/train.tsv'
+       phon_features = 'datasets/Chang2020/features.tsv'
+       sem = 'datasets/Chang2020/train_sem.npy'
+
+    sample_dataset = Monosyllabic_Dataset(train,phon_features,sem)
+    no_sample_dataset = Monosyllabic_Dataset(train,phon_features,sem,
                                    sample = False)
 
-    sample_loader = torch.utils.data.DataLoader(sample_dataset,shuffle=True,batch_size=10,drop_last=True)
+    sample_loader = torch.utils.data.DataLoader(sample_dataset,shuffle=True,batch_size=args.batch_size,drop_last=True)
     no_sample_loader = torch.utils.data.DataLoader(no_sample_dataset,shuffle=True,batch_size=10,drop_last=False)
     phoneme_embeddings = torch.Tensor(sample_dataset.phonology_tokenizer.embedding_table.to_numpy())
     
@@ -85,7 +97,7 @@ if __name__ == '__main__':
     model = model_config.create_model().to(device)
 
     if args.phase_1_initial_step:
-       ckpt_path = glob.glob(f'ckpts/{args.ID}/phase_1/{args.phase_1_initial_step}')[0]
+       ckpt_path = glob.glob(f'ckpts/{args.ID}/phase_1/{args.phase_1_initial_step}.pth')[0]
        model.load_state_dict(torch.load(ckpt_path))
 
     ### TODO: bundle optimizers / learning hyperparameters into Trainer
@@ -97,59 +109,76 @@ if __name__ == '__main__':
 
     lr = optimizer_hyperparams.get('lr',{})
     weight_decay = optimizer_hyperparams.get('weight_decay',{})
+    
+    opt_alg = optimizer_hyperparams.get('optimizer','SGD')
+    if opt_alg == "SGD":
+       opt = torch.optim.SGD
+    elif opt_alg == "Adam":
+       opt = torch.optim.Adam
+    elif opt_alg == 'AdamW':
+       opt = torch.optim.AdamW
+    else:
+       raise ValueError('Invalid choice of optimizer')
 
+    print(opt)
     ### Optimizer for the phonology (P2P) task
-    opt_phon = torch.optim.AdamW(
-                       list(model.cleanup['state_to_hidden']['phonology'].parameters()) +\
-                       list(model.cleanup['hidden_to_state']['phonology'].parameters()),
+    opt_phon = opt(
+                       list(model.p2p_gradient.parameters()) +\
+                       list(model.phon_gradient.parameters()),
                        lr.get('phon',5e-3),weight_decay=weight_decay.get('phon',0)
                        )
-    ### Optimizer for the semantics (S2P) task
-    opt_sem = torch.optim.AdamW(
-                       list(model.cleanup['state_to_hidden']['semantics'].parameters()) +\
-                       list(model.cleanup['hidden_to_state']['semantics'].parameters()),
+    ### Optimizer for the semantics (S2S) task
+    opt_sem = opt(
+                       list(model.s2s_gradient.parameters()) +\
+                       list(model.sem_gradient.parameters()),
                        lr.get('sem',5e-3),weight_decay=weight_decay.get('sem',0)
                        )
 
     ### Optimizer for the production (S2P + P2P) task
-    opt_prod = torch.optim.AdamW(
-                       list(model.cleanup['state_to_hidden']['phonology'].parameters()) +\
-                       list(model.cleanup['hidden_to_state']['phonology'].parameters()) +\
-                       list(model.phonology_semantics['state_to_hidden']['semantics'].parameters()) +\
-                       list(model.phonology_semantics['hidden_to_state']['phonology'].parameters()),
+    opt_prod = opt(
+                       list(model.p2p_gradient.parameters()) +\
+                       list(model.s2p_gradient.parameters()) +\
+                       list(model.phon_gradient.parameters()),
                        lr.get('prod',5e-3),weight_decay=weight_decay.get('prod',0)
                        )
 
     ### Optimizer for the comprehension (P2S + S2S) task
-    opt_comp = torch.optim.AdamW(
-                       list(model.cleanup['state_to_hidden']['semantics'].parameters()) +\
-                       list(model.cleanup['hidden_to_state']['semantics'].parameters()) +\
-                       list(model.phonology_semantics['state_to_hidden']['phonology'].parameters()) +\
-                       list(model.phonology_semantics['hidden_to_state']['semantics'].parameters()),
+    opt_comp = opt(
+                       list(model.s2s_gradient.parameters()) +\
+                       list(model.p2s_gradient.parameters()) +\
+                       list(model.sem_gradient.parameters()),
                        lr.get('comp',5e-3),weight_decay=weight_decay.get('comp',0)
                        )
     
     ### Optimizer for the reading (O2P + O2S) task.
-    opt_read = torch.optim.AdamW(
-                          list(model.orthography_indirect.parameters())+
-                          list(model.orthography_direct.parameters()),
+    opt_read = opt(
+                          list(model.o2s_gradient.parameters()) +\
+                          list(model.o2p_gradient.parameters()) +\
+                          list(model.sem_gradient.weights[-2].parameters()) +\
+                          list(model.sem_gradient.weights[-1].parameters()) +\
+                          list(model.phon_gradient.weights[-2].parameters()) +\
+                          list(model.phon_gradient.weights[-1].parameters()),
                           lr.get('read',5e-3),weight_decay=weight_decay.get('read',0)
                           )
 
     ##################################### Phase 1 #####################################
 
-    p2p_acc,p2p_loss = [],[]
-    s2s_acc,s2s_loss = [],[]
+    if args.phase_1_initial_step < args.phase_1_steps:
+       p2p_acc,p2p_loss = [],[]
+       s2s_acc,s2s_loss = [],[]
 
-    p2s_acc,p2s_loss = [],[]
-    s2p_acc,s2p_loss = [],[]
+       p2s_acc,p2s_loss = [],[]
+       s2p_acc,s2p_loss = [],[]
 
-    eval_p2s_acc = []
-    eval_s2p_acc = []
+       eval_p2s_acc = []
+       eval_s2p_acc = []
 
     last_val = True    
+    skip_phon,skip_sem = False,False
+
     for current_step in range(args.phase_1_initial_step,args.phase_1_steps):
-        
+        if skip_phon and skip_sem: break;        
+
         ### Sample batch according to scaled word frequency.
         for data in sample_loader:
             break;
@@ -157,8 +186,7 @@ if __name__ == '__main__':
         ### Sample from tasks w/ prob. phonology = .1, semantics = .1,
         ### production = .4, and comprehension = .4
         if random.random() < .2:
-           if random.random() < .5:
-            
+           if random.random() < .5 and skip_phon is False:            
               ### Phonology training step
               losses,accs = trainer.train_p2p(model,opt_phon,data)
 
@@ -168,7 +196,7 @@ if __name__ == '__main__':
               np.save(f'metrics/{args.ID}/train_p2p_loss',p2p_loss)
               np.save(f'metrics/{args.ID}/train_p2p_acc',p2p_acc)
 
-           else:
+           elif skip_sem is False:
               ### Semantics training step
               losses,accs = trainer.train_s2s(model,opt_sem,data)
 
@@ -179,7 +207,7 @@ if __name__ == '__main__':
               np.save(f'metrics/{args.ID}/train_s2s_acc',s2s_acc)
 
         else:
-           if random.random() < .5:
+           if random.random() < .5 and skip_phon is False:
               ### Production training step
               loss,acc = trainer.train_s2p(model,opt_prod,data)
 
@@ -189,7 +217,7 @@ if __name__ == '__main__':
               np.save(f'metrics/{args.ID}/train_s2p_loss',s2p_loss)
               np.save(f'metrics/{args.ID}/train_s2p_acc',s2p_acc)
 
-           else:
+           elif skip_sem is False:
               ### Comprehension training step
               loss,acc = trainer.train_p2s(model,opt_comp,data)
 
@@ -247,7 +275,15 @@ if __name__ == '__main__':
             print(eval_s2p_acc[-1])
             print(eval_p2s_acc[-1])
 
+            if args.early_stopping:
+               if eval_s2p_acc[-1][0] > .9:
+                  skip_phon = True
+               if eval_p2s_acc[-1][1] > .86:
+                  skip_sem = True
+
             last_val = True
+
+            print(model.phon_gradient.weights[0].weight[0,0],model.phon_gradient.weights[1].weight[0,0])
             
             np.save(f'metrics/{args.ID}/eval_s2p_acc',eval_s2p_acc)
             np.save(f'metrics/{args.ID}/eval_p2s_acc',eval_p2s_acc)
@@ -255,7 +291,7 @@ if __name__ == '__main__':
     ##################################### Phase 2 #####################################
 
     if args.phase_2_initial_step > 0:
-       ckpt_path = glob.glob(f'ckpts/{args.ID}/phase_2/{args.phase_2_initial_step}')[0]
+       ckpt_path = glob.glob(f'ckpts/{args.ID}/phase_2/{args.phase_2_initial_step}.pth')[0]
        model.load_state_dict(torch.load(ckpt_path))
 
     o2p_loss,o2p_acc = [],[]
@@ -263,6 +299,8 @@ if __name__ == '__main__':
     
     eval_o2p_acc = []
     eval_o2s_acc = []
+    eval_o2p2s_acc = []
+    eval_o2s_only_acc = []
 
     last_val = True
     for current_step in range(args.phase_2_steps):
@@ -303,17 +341,30 @@ if __name__ == '__main__':
             
         ### Pass evaluation data through the model.
         if (current_step+1)%(args.phase_2_eval_interval) == 0:
-            all_o2p_acc,all_o2s_acc = 3 * [0], 3 * [0]
-            for data in no_sample_loader:
-                _,accs = trainer.train_full(model,None,data)
-                phon_acc,sem_acc = accs[0],accs[1]
+            with torch.no_grad():
+                 all_o2p_acc,all_o2s_acc = 3 * [0], 3 * [0]
+                 all_o2p2s_acc,all_o2s_only_acc = 3 * [0], 3 * [0]
+
+                 for data in no_sample_loader:
+                     _,accs = trainer.train_full(model,None,data)
+                     phon_acc,sem_acc = accs[0],accs[1]
+
+                     _,accs = trainer.train_full(model,None,data,lesions=['o2s'])
+                     o2p2s_acc = accs[1]
+
+                     _,accs = trainer.train_full(model,None,data,lesions=['o2s'])
+                     o2s_only_acc = accs[1]
                 
-                for jdx,acc in enumerate(phon_acc):
-                   all_o2p_acc[jdx] += data['phonology'].shape[0] * acc
-                   all_o2s_acc[jdx] += data['semantics'].shape[0] * sem_acc[jdx]
+                     for jdx,acc in enumerate(phon_acc):
+                         all_o2p_acc[jdx] += data['phonology'].shape[0] * acc
+                         all_o2s_acc[jdx] += data['semantics'].shape[0] * sem_acc[jdx]
+                         all_o2p2s_acc[jdx] += data['semantics'].shape[0] * o2p2s_acc[jdx]
+                         all_o2s_only_acc[jdx] += data['semantics'].shape[0] * o2s_only_acc[jdx]
 
             eval_o2p_acc.append([a/len(no_sample_dataset) for a in all_o2p_acc])
             eval_o2s_acc.append([a/len(no_sample_dataset) for a in all_o2s_acc])
+            eval_o2p2s_acc.append([a/len(no_sample_dataset) for a in all_o2p2s_acc])
+            eval_o2s_only_acc.append([a/len(no_sample_dataset) for a in all_o2s_only_acc])
                 
             print("\n--------------------Eval-----------------------------\n")
             print(current_step)
@@ -324,3 +375,5 @@ if __name__ == '__main__':
 
             np.save(f'metrics/{args.ID}/eval_o2p_acc',eval_o2p_acc)
             np.save(f'metrics/{args.ID}/eval_o2s_acc',eval_o2s_acc)
+            np.save(f'metrics/{args.ID}/eval_o2p2s_acc',eval_o2p2s_acc)
+            np.save(f'metrics/{args.ID}/eval_o2s_only_acc',eval_o2s_only_acc)
