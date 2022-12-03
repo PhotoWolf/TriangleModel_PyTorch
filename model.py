@@ -4,34 +4,38 @@ from typing import Optional,List,Dict
 from dataclasses import dataclass
 
 class TimeAveragedInputs(torch.nn.Module):
-   def __init__(self,in_features : int, out_features : int,bias : Optional[bool] =False):
+   def __init__(self,in_features_list : List[int], out_features : int,bias : Optional[bool] =False):
        '''
         Time-Averaged Inputs formulation of the gradient (refer to
-        Plaut et. al, 1998). Definition is slightly modified to 
-        account for lesioning.
+        Plaut et. al, 1998).
 
         Args:
-           in_features (int) : dimemsionality of [X]
-           out_features (int) : dimensionality of [Y]
+           in_features_list (List[int]) : dimemsionality of each input vector
+           out_features (int) : dimensionality of output vectors
            bias (bool) : if True, use trainable bias term
 
        '''
        super(TimeAveragedInputs,self).__init__()
-       self.W1 = torch.nn.Linear(in_features,out_features,bias=bias)
+       self.weights = torch.nn.ModuleList(
+                          [torch.nn.Linear(in_features,out_features,bias=bias) for in_features in in_features_list]   
+                          )
 
-   def forward(self, X : torch.Tensor, Y : torch.Tensor, s : int) -> torch.Tensor:
+   def forward(self, X : List[torch.Tensor], Y : torch.Tensor) -> torch.Tensor:
        '''
-         Compute the contribution of [X] to the gradient of [Y] w.r.t to time. 
+         Compute the gradient of [Y] w.r.t to time. 
          
          Args:
-            X (torch.Tensor) : dimensionality [in_features]
+            X (List[torch.Tensor]) : dimensionalities [in_features_list]
             Y (torch.Tensor) : dimensionality [out_features]
-            s (int) : scales the -Y term according to the 
-                      # of participating lesions.
          Returns:
             gradient contribution; dimensionality [out_features]
        '''
-       return self.W1(torch.sigmoid(X)) - (1/s) * Y
+       nX = 0
+       for idx,input_vector in enumerate(X):
+           if torch.isinf(input_vector).all(): continue;
+           nX = nX + self.weights[idx](torch.sigmoid(input_vector))
+       return nX - Y
+
 
 @dataclass()
 class ModelConfig:
@@ -155,38 +159,27 @@ class TriangleModel(torch.nn.Module):
         self.phon_2_sem_dim,self.sem_2_phon_dim = phon_2_sem_dim,sem_2_phon_dim
         self.orth_2_sem_dim,self.orth_2_phon_dim = orth_2_sem_dim,orth_2_phon_dim
 
-        ### Instantiate Cleanup Units
-        self.cleanup = torch.nn.ModuleDict({'state_to_hidden':torch.nn.ModuleDict({
-                                        'semantics':operator(sem_dim,sem_cleanup_dim,learn_bias),
-                                        'phonology':operator(phon_dim,phon_cleanup_dim,learn_bias)}),
-                                            'hidden_to_state':torch.nn.ModuleDict({
-                                        'semantics':operator(sem_cleanup_dim,sem_dim,learn_bias),
-                                        'phonology':operator(phon_cleanup_dim,phon_dim,learn_bias)})
-                                        })
-        
-        ### Instantiate S2P and P2S pathways
-        self.phonology_semantics = torch.nn.ModuleDict({'state_to_hidden':torch.nn.ModuleDict({
-                                                 'semantics':operator(sem_dim,sem_2_phon_dim,learn_bias),
-                                                 'phonology':operator(phon_dim,phon_2_sem_dim,learn_bias)}),
-                                                        'hidden_to_state':torch.nn.ModuleDict({
-                                                 'phonology':operator(sem_2_phon_dim,phon_dim,learn_bias),
-                                                 'semantics':operator(phon_2_sem_dim,sem_dim,learn_bias)})
-                                                 })
-        
-        ### Instantiate indirect O2P and O2S pathways
-        self.orthography_indirect = torch.nn.ModuleDict({'state_to_hidden':torch.nn.ModuleDict({
-                                                  'semantics':operator(orth_dim,orth_2_sem_dim,learn_bias), 
-                                                  'phonology':operator(orth_dim,orth_2_phon_dim,learn_bias)}),
-                                                        'hidden_to_state':torch.nn.ModuleDict({
-                                                  'semantics':operator(orth_2_sem_dim,sem_dim,learn_bias),
-                                                  'phonology':operator(orth_2_phon_dim,phon_dim,learn_bias)})
-                                                  })
-        
-        ### Instantiate direct O2P and O2S pathways
-        self.orthography_direct = torch.nn.ModuleDict({
-                                                   'semantics':operator(orth_dim,sem_dim,learn_bias),
-                                                   'phonology':operator(orth_dim,phon_dim,learn_bias)}
-                                                   )
+        ### Instantiate phonology gradient
+        self.phon_gradient = operator([phon_cleanup_dim,sem_2_phon_dim,
+                                    orth_2_phon_dim,orth_dim],phon_dim,learn_bias)
+
+        ### Instantiate semantics gradient
+        self.sem_gradient = operator([sem_cleanup_dim,phon_2_sem_dim,
+                                    orth_2_sem_dim,orth_dim],sem_dim,learn_bias)
+
+        ### Instantiate cleanup gradients
+        self.p2p_gradient = operator([phon_dim],phon_cleanup_dim,learn_bias)
+        self.s2s_gradient = operator([sem_dim],sem_cleanup_dim,learn_bias)
+
+        ### Instantiate oral hidden unit gradients
+        self.s2p_gradient = operator([sem_dim],sem_2_phon_dim,learn_bias)
+        self.p2s_gradient = operator([phon_dim],phon_2_sem_dim,learn_bias)
+
+        ### Instantiate reading hidden unit gradients
+        self.o2p_gradient = operator([orth_dim],orth_2_phon_dim,learn_bias)
+        self.o2s_gradient = operator([orth_dim],orth_2_sem_dim,learn_bias)
+
+
     def forward(self,inputs : Dict[str,torch.Tensor]) -> Dict[str,torch.Tensor]:
         '''
            Compute gradients of all states / hidden units w.r.t to time.
@@ -246,55 +239,45 @@ class TriangleModel(torch.nn.Module):
         else:
            p2p_lesion = 1
 
-        ### Compute lesioning adjustment
-        a_p = max([1,p2p_lesion + s2p_lesion + 2 * o2p_lesion])
-        a_s = max([1,s2s_lesion + p2s_lesion + 2 * o2s_lesion])
+        suppress_inputs = lambda inputs,lam: -float("Inf") * torch.ones_like(inputs,device=inputs.device) if lam == 0 else inputs
 
         ### Compute gradient of phonology
         phon_gradient = 0
-        if p2p_lesion:
-           phon_gradient = p2p_lesion * self.cleanup['hidden_to_state']['phonology'](cleanup_phon,phonology,a_p)
-        if s2p_lesion:
-           phon_gradient = phon_gradient + s2p_lesion * self.phonology_semantics['hidden_to_state']['phonology'](
-                                                                    sem_2_phon,phonology,a_p)
-        if o2p_lesion:
-           phon_gradient = phon_gradient + o2p_lesion * (self.orthography_direct['phonology'](orthography,phonology,a_p) \
-                               + self.orthography_indirect['hidden_to_state']['phonology'](orth_2_phon,phonology,a_p))
-
+        if (p2p_lesion + s2p_lesion + o2p_lesion) > 0:
+           phon_gradient = self.phon_gradient([suppress_inputs(cleanup_phon,p2p_lesion),
+                                                  suppress_inputs(sem_2_phon,s2p_lesion),
+                                                  suppress_inputs(orth_2_phon,o2p_lesion),
+                                                  suppress_inputs(orthography,o2p_lesion)],
+                                               phonology)
         ### Compute gradient of semantics
         sem_gradient = 0
-        if s2s_lesion:
-           sem_gradient = s2s_lesion * self.cleanup['hidden_to_state']['semantics'](cleanup_sem,semantics,a_s)
-        if p2s_lesion:
-           sem_gradient = sem_gradient + p2s_lesion * self.phonology_semantics['hidden_to_state']['semantics'](
-                                                                    phon_2_sem,semantics,a_s)
-        if o2s_lesion:
-           sem_gradient = sem_gradient + o2s_lesion * (self.orthography_direct['semantics'](orthography,semantics,a_s) \
-                               + self.orthography_indirect['hidden_to_state']['semantics'](orth_2_sem,semantics,a_s))
+        if (s2s_lesion + p2s_lesion + o2s_lesion) > 0:
+           sem_gradient = self.sem_gradient([suppress_inputs(cleanup_sem,s2s_lesion),
+                                                suppress_inputs(phon_2_sem,p2s_lesion),
+                                                suppress_inputs(orth_2_sem,o2s_lesion),
+                                                suppress_inputs(orthography,o2s_lesion)],
+                                              semantics)
 
         ### Compute gradient of cleanup units
         cleanup_phon_gradient,cleanup_sem_gradient = 0,0
-        
         if p2p_lesion:
-           cleanup_phon_gradient = self.cleanup['state_to_hidden']['phonology'](phonology,cleanup_phon,1)
+           cleanup_phon_gradient = self.p2p_gradient([suppress_inputs(phonology,p2p_lesion)],cleanup_phon)
         if s2s_lesion:
-           cleanup_sem_gradient = self.cleanup['state_to_hidden']['semantics'](semantics,cleanup_sem,1)
+           cleanup_sem_gradient = self.s2s_gradient([suppress_inputs(semantics,s2s_lesion)],cleanup_sem)
 
         ### Compute gradient of oral hidden units
         phon_2_sem_gradient,sem_2_phon_gradient = 0,0
-        
         if p2s_lesion:
-           phon_2_sem_gradient = self.phonology_semantics['state_to_hidden']['phonology'](phonology,phon_2_sem,1)
+           phon_2_sem_gradient = self.p2s_gradient([suppress_inputs(phonology,p2s_lesion)],phon_2_sem)
         if s2p_lesion:
-           sem_2_phon_gradient = self.phonology_semantics['state_to_hidden']['semantics'](semantics,sem_2_phon,1)
+           sem_2_phon_gradient = self.s2p_gradient([suppress_inputs(semantics,s2p_lesion)],sem_2_phon)
 
         ### Compute gradient of reading hidden units
-        orth_2_phon_gradient,orth_2_sem_gradient = 0,0
-
-        if o2p_lesion:
-           orth_2_phon_gradient = self.orthography_indirect['state_to_hidden']['phonology'](orthography,orth_2_phon,1)
+        orth_2_sem_gradient,orth_2_phon_gradient = 0,0
         if o2s_lesion:
-           orth_2_sem_gradient = self.orthography_indirect['state_to_hidden']['semantics'](orthography,orth_2_sem,1)
+           orth_2_sem_gradient = self.o2s_gradient([suppress_inputs(orthography,o2s_lesion)],orth_2_sem)
+        if o2p_lesion:
+           orth_2_phon_gradient = self.o2p_gradient([suppress_inputs(orthography,o2p_lesion)],orth_2_phon)
 
         ### Write gradients to dictionary
         gradients = {}
