@@ -190,7 +190,7 @@ def plot_strain(results : np.array, filename : str):
     plt.title('Strain Mean Error')
     plt.xticks([0,1],['Low Frq','High Frq']);
     
-    plt.savefig(f'{filename}_median.png')
+    plt.savefig(f'{filename}_mean.png')
     
     plt.figure(figsize=(15,8),dpi=400)
     plt.plot([0,1],[np.median(results[:,3][np.logical_and(np.logical_and(results[:,2]==0,results[:,1]==0),results[:,0]==0)]),
@@ -339,7 +339,7 @@ def plot_development(results : np.array, filename : str):
     '''
     
     fig = plt.figure(figsize=(15,8),dpi=400)
-    x = np.linspace(0,4,results[-1].shape[-1])
+    x = np.linspace(1/results[-1].shape[-1],4,results[-1].shape[-1])
     
     plt.plot(x,np.mean(results[0],axis=0),label='P->P',color='blue')
     plt.plot(x,np.mean(results[1],axis=0),label='S->S',color='blue',linestyle=':')
@@ -357,7 +357,7 @@ def plot_development(results : np.array, filename : str):
     plt.savefig(f'{filename}.png')
     plt.close('all')    
 
-def eval_development(ckpts : List[str], model : TriangleModel, trainer : Trainer):
+def eval_development(ckpts : List[str], model : TriangleModel, trainer : Trainer, lesions = []):
     '''
     step the model w/ a smaller timestep. :og the magnitude of
     each "output" (read: a state / hidden unit pass through
@@ -373,6 +373,7 @@ def eval_development(ckpts : List[str], model : TriangleModel, trainer : Trainer
     global dataset
     for ckpt in tqdm.tqdm(ckpts,position=0):
        model.load_state_dict(torch.load(ckpt))
+       model.lesions = lesions
        model.eval()
         
        ID = ckpt.split('/')[1]
@@ -382,16 +383,19 @@ def eval_development(ckpts : List[str], model : TriangleModel, trainer : Trainer
            with torch.no_grad():
                values = {'o2s':[],'o2p':[],'s2p':[],'p2p':[],'s2s':[],'p2s':[]}
                outputs = trainer.step(model,{'orthography':data['orthography'][None].to(device)},
-                                              delta_t=1/12,return_outputs=True)
-            
-               values['o2p'].append([torch.sigmoid(output['orth_2_phon']).norm().item() for output in outputs])
-               values['o2s'].append([torch.sigmoid(output['orth_2_sem']).norm().item() for output in outputs])
-            
-               values['p2p'].append([torch.sigmoid(output['cleanup_phon']).norm().item() for output in outputs])
-               values['s2s'].append([torch.sigmoid(output['cleanup_sem']).norm().item() for output in outputs])
-            
-               values['p2s'].append([torch.sigmoid(output['phon_2_sem']).norm().item() for output in outputs])
-               values['s2p'].append([torch.sigmoid(output['sem_2_phon']).norm().item() for output in outputs])
+                                              delta_t=1/12,return_outputs=True)[1::]
+               phonology,semantics = data['phonology'][None].to(device),data['semantics'][None].to(device)            
+
+               f = lambda x : torch.sigmoid(x)
+
+               values['o2p'].append([model.phon_gradient.weights[2](f(output['orth_2_phon']))[phonology==1].mean().item() for output in outputs])
+               values['o2s'].append([model.sem_gradient.weights[2](f(output['orth_2_sem']))[semantics==1].mean().item() for output in outputs])
+
+               values['p2p'].append([model.phon_gradient.weights[0](f(output['cleanup_phon']))[phonology==1].mean().item() for output in outputs])
+               values['s2s'].append([model.sem_gradient.weights[0](f(output['cleanup_sem']))[semantics==1].mean().item() for output in outputs])
+
+               values['s2p'].append([model.phon_gradient.weights[1](f(output['sem_2_phon']))[phonology==1].mean().item() for output in outputs])
+               values['p2s'].append([model.sem_gradient.weights[1](f(output['phon_2_sem']))[semantics==1].mean().item() for output in outputs])
 
        values['o2s'] = np.array(values['o2s'])
        values['o2p'] = np.array(values['o2p'])
@@ -405,7 +409,91 @@ def eval_development(ckpts : List[str], model : TriangleModel, trainer : Trainer
        results = np.stack([values['p2s'],values['s2s'],
                            values['s2p'],values['p2p'],
                            values['o2p'],values['o2s']])
-       plot_development(results,f'figures/{ID}/development/{step}')
+       os.makedirs(f'figures/{ID}/development/{step}/{"_".join(lesions)}',exist_ok=True)        
+       plot_development(results,f'figures/{ID}/development/{step}/{"_".join(lesions)}')
+    
+def plot_brysbaert(results : np.array, filename : str):
+    '''
+    Plot and save results on Strain, et. al (1995).
+    
+    Args:
+        results (np.array) : array containing data statistics and the 
+                             model's SSE.
+        filename (str) : base name at which to save figures. 
+    '''
+    
+    fig = plt.figure(figsize=(15,8),dpi=400)
+    plt.subplot(1,2,1)
+    
+    plt.scatter(results[:,1],results[:,2],alpha=.25)
+    plt.xlabel('Concreteness')
+    plt.ylabel('SSE')
+    plt.title('Concreteness vs. SSE Error')
+    
+    normalized_frequencies = np.clip(np.sqrt(results[:,0])/(30000**.5),.05,1)
+    normalized_frequencies = normalized_frequencies/np.sum(normalized_frequencies)
+    
+    plt.subplot(1,2,2)
+    plt.scatter(normalized_frequencies,results[:,1],alpha=.25,c=results[:,2].tolist())
+    
+    plt.xlabel('Concreteness')
+    plt.ylabel('Frequency')
+    plt.title('Concreteness vs. Normalized Frequency')
+    plt.savefig(f'{filename}.png')
+    
+    plt.close('all')
+    
+def eval_brysbaert(ckpts : List[str], model : TriangleModel, trainer : Trainer):
+    '''
+    Compare model against Brysbaert et. al (2014) concreteness ratings.
+    
+    Args:
+        ckpts (List[str]) : list of model checkpoints to evaluate
+        model (TriangleModel)
+        trainer (Trainer)
+    '''
+    
+    data = pd.read_csv('datasets/JasonLo/df_train.csv')
+    orthography,phonology = data['ort'],data['pho']
+    frq = data['wf']
+    
+    concreteness_data = pd.read_excel('datasets/JasonLo/concreteness.xlsx')
+    concreteness_dict = concreteness_data[['Word','Conc.M']].set_index('Word').to_dict(orient='index')
+
+    words = {}
+    for idx,word in enumerate(data['word']):
+        if concreteness_dict.get(word,None) is not None:
+            words[word] = [orthography.iloc[idx],phonology.iloc[idx],frq.iloc[idx],
+                           concreteness_dict[word]['Conc.M']]
+            
+    global orthography_tokenizer,phonology_tokenizer
+    
+    device = trainer.device
+
+    ### Iterate over checkpoints
+    for ckpt in tqdm.tqdm(ckpts,position=0):
+       model.load_state_dict(torch.load(ckpt,map_location=device))
+       model.eval()
+        
+       ID = ckpt.split('/')[1]
+       step = ckpt.split('/')[-1].replace('.pth','')
+       os.makedirs(f'figures/{ID}/brysbaert/{step}',exist_ok=True)
+       with torch.no_grad():
+           ### Iterate over starting timestep for SSE
+           for start_step in range(2,12):
+               results = []
+               for idx,word in tqdm.tqdm(enumerate(words),position=0):
+#                   print(idx)
+                   orthography_tensor = orthography_tokenizer(words[word][0])[None].to(device)
+                   phonology_tensor = phonology_tokenizer(words[word][1])[None].to(device)
+                   
+                   predicted_phonology,_ = trainer.step(model,{'orthography':orthography_tensor})
+                   sse = (phonology_tensor-predicted_phonology[start_step::]).pow(2).sum(dim=(1,2)).mean().item()
+                   results.append([words[word][2],words[word][3],sse])
+                    
+               results = np.array(results)
+               print(results.shape)
+               plot_brysbaert(results,f'figures/{ID}/brysbaert/{step}/{start_step}')
         
 if __name__=='__main__':
    parser = argparse.ArgumentParser()
@@ -453,8 +541,13 @@ if __name__=='__main__':
     
    ckpts = glob.glob(f'ckpts/{args.ID}/phase_2/*')
 
-   #print("Plotting development...")                     
-   #eval_development(ckpts,model,trainer)
+   print("Plotting Concreteness...")
+   eval_brysbaert(ckpts,model,trainer)
+
+   print("Plotting development...")                     
+   eval_development(ckpts,model,trainer,lesions=['full'])
+   eval_development(ckpts,model,trainer,lesions=['o2s'])
+   eval_development(ckpts,model,trainer,lesions=['o2p'])
 
    print("Plotting Taraban...")                     
    eval_taraban(ckpts,model,trainer)
