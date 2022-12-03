@@ -34,15 +34,14 @@ class TimeAveragedInputs(torch.nn.Module):
             gradient; dimensionality [out_features]
        '''
        assert len(lesions) == len(X)
-        
+       if sum(lesions) == len(lesions):
+          return 0
+      
        nX = 0
        for idx,input_vector in enumerate(X):
-           if lesions[idx] = 1:
+           if lesions[idx] != 1:
                nX = nX + self.weights[idx](torch.sigmoid(input_vector))
-       if (nX == 0).all():
-          return 0
-       else:
-          return nX - Y
+       return nX - Y
 
 
 @dataclass()
