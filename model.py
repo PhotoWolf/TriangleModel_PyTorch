@@ -4,7 +4,7 @@ from typing import Optional,List,Dict
 from dataclasses import dataclass
 
 class TimeAveragedInputs(torch.nn.Module):
-   def __init__(self,in_features_list : List[int], out_features : int,bias : Optional[bool] =False):
+   def __init__(self,in_features_list : List[int], out_features : int,bias : Optional[bool] = False):
        '''
         Time-Averaged Inputs formulation of the gradient (refer to
         Plaut et. al, 1998).
@@ -20,21 +20,29 @@ class TimeAveragedInputs(torch.nn.Module):
                           [torch.nn.Linear(in_features,out_features,bias=bias) for in_features in in_features_list]   
                           )
 
-   def forward(self, X : List[torch.Tensor], Y : torch.Tensor) -> torch.Tensor:
+   def forward(self, X : List[torch.Tensor], Y : torch.Tensor, lesions : List[int]) -> torch.Tensor:
        '''
          Compute the gradient of [Y] w.r.t to time. 
          
          Args:
             X (List[torch.Tensor]) : dimensionalities [in_features_list]
             Y (torch.Tensor) : dimensionality [out_features]
+            lesions (List[int]) : binary lesions which are applied to each 
+                                  Tensor in [X].
+            
          Returns:
-            gradient contribution; dimensionality [out_features]
+            gradient; dimensionality [out_features]
        '''
+       assert len(lesions) == len(X)
+        
        nX = 0
        for idx,input_vector in enumerate(X):
-           if torch.isinf(input_vector).all(): continue;
-           nX = nX + self.weights[idx](torch.sigmoid(input_vector))
-       return nX - Y
+           if lesions[idx] = 1:
+               nX = nX + self.weights[idx](torch.sigmoid(input_vector))
+       if (nX == 0).all():
+          return 0
+       else:
+          return nX - Y
 
 
 @dataclass()
@@ -210,74 +218,53 @@ class TriangleModel(torch.nn.Module):
 
         ### Get lesions
         if 'o2p' in self.lesions:
-           o2p_lesion = 0
-        else:
            o2p_lesion = 1
+        else:
+           o2p_lesion = 0
 
         if 'o2s' in self.lesions:
-           o2s_lesion = 0
-        else:
            o2s_lesion = 1
+        else:
+           o2s_lesion = 0
 
         if 'p2s' in self.lesions:
-           p2s_lesion = 0
-        else:
            p2s_lesion = 1
+        else:
+           p2s_lesion = 0
 
         if 's2p' in self.lesions:
-           s2p_lesion = 0
-        else:
            s2p_lesion = 1
+        else:
+           s2p_lesion = 0
 
         if 's2s' in self.lesions:
-           s2s_lesion = 0
-        else:
            s2s_lesion = 1
+        else:
+           s2s_lesion = 0
 
         if 'p2p' in self.lesions:
-           p2p_lesion = 0
-        else:
            p2p_lesion = 1
-
-        suppress_inputs = lambda inputs,lam: -float("Inf") * torch.ones_like(inputs,device=inputs.device) if lam == 0 else inputs
+        else:
+           p2p_lesion = 0
 
         ### Compute gradient of phonology
-        phon_gradient = 0
-        if (p2p_lesion + s2p_lesion + o2p_lesion) > 0:
-           phon_gradient = self.phon_gradient([suppress_inputs(cleanup_phon,p2p_lesion),
-                                                  suppress_inputs(sem_2_phon,s2p_lesion),
-                                                  suppress_inputs(orth_2_phon,o2p_lesion),
-                                                  suppress_inputs(orthography,o2p_lesion)],
-                                               phonology)
+        phon_gradient = self.phon_gradient([cleanup_phon,sem_2_phon,orth_2_phon,orthography],phonology
+                                                          [p2p_lesion,s2p_lesion,o2p_lesion,o2p_lesion])
         ### Compute gradient of semantics
-        sem_gradient = 0
-        if (s2s_lesion + p2s_lesion + o2s_lesion) > 0:
-           sem_gradient = self.sem_gradient([suppress_inputs(cleanup_sem,s2s_lesion),
-                                                suppress_inputs(phon_2_sem,p2s_lesion),
-                                                suppress_inputs(orth_2_sem,o2s_lesion),
-                                                suppress_inputs(orthography,o2s_lesion)],
-                                              semantics)
+        sem_gradient = self.sem_gradient([s2s_lesion,phon_2_semorth_2_sem,orthography],semantics,
+                                                     [cleanup_sem,p2s_lesion,o2s_lesion,o2s_lesion])
 
         ### Compute gradient of cleanup units
-        cleanup_phon_gradient,cleanup_sem_gradient = 0,0
-        if p2p_lesion:
-           cleanup_phon_gradient = self.p2p_gradient([suppress_inputs(phonology,p2p_lesion)],cleanup_phon)
-        if s2s_lesion:
-           cleanup_sem_gradient = self.s2s_gradient([suppress_inputs(semantics,s2s_lesion)],cleanup_sem)
+        cleanup_phon_gradient = self.p2p_gradient([phonology],cleanup_phon,[p2p_lesion])
+        cleanup_sem_gradient = self.s2s_gradient([semantics],cleanup_sem,[s2s_lesion])
 
         ### Compute gradient of oral hidden units
-        phon_2_sem_gradient,sem_2_phon_gradient = 0,0
-        if p2s_lesion:
-           phon_2_sem_gradient = self.p2s_gradient([suppress_inputs(phonology,p2s_lesion)],phon_2_sem)
-        if s2p_lesion:
-           sem_2_phon_gradient = self.s2p_gradient([suppress_inputs(semantics,s2p_lesion)],sem_2_phon)
+        phon_2_sem_gradient = self.p2s_gradient([phonology],phon_2_sem,[p2s_lesion])
+        sem_2_phon_gradient = self.s2p_gradient([semantics],sem_2_phon,[s2p_lesion])
 
         ### Compute gradient of reading hidden units
-        orth_2_sem_gradient,orth_2_phon_gradient = 0,0
-        if o2s_lesion:
-           orth_2_sem_gradient = self.o2s_gradient([suppress_inputs(orthography,o2s_lesion)],orth_2_sem)
-        if o2p_lesion:
-           orth_2_phon_gradient = self.o2p_gradient([suppress_inputs(orthography,o2p_lesion)],orth_2_phon)
+        orth_2_sem_gradient = self.o2s_gradient([orthography],orth_2_sem,[o2s_lesion])
+        orth_2_phon_gradient = self.o2p_gradient([orthography],orth_2_phon,[o2p_lesion])
 
         ### Write gradients to dictionary
         gradients = {}
