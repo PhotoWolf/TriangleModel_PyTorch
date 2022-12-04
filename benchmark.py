@@ -352,7 +352,7 @@ if __name__ == '__main__':
                      _,accs = trainer.train_full(model,None,data,lesions=['o2s'])
                      o2p2s_acc = accs[1]
 
-                     _,accs = trainer.train_full(model,None,data,lesions=['o2s'])
+                     _,accs = trainer.train_full(model,None,data,lesions=['o2p'])
                      o2s_only_acc = accs[1]
                 
                      for jdx,acc in enumerate(phon_acc):
@@ -370,6 +370,8 @@ if __name__ == '__main__':
             print(current_step)
             print(eval_o2p_acc[-1])
             print(eval_o2s_acc[-1])
+            print(eval_o2p2s_acc[-1])
+            print(eval_o2s_only_acc[-1])
 
             last_val = True            
 
