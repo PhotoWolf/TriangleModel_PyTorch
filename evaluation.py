@@ -77,6 +77,21 @@ def plot_performance(ID : str):
     plt.title('Orthography -> Semantics');
     
     plt.savefig(f'figures/{ID}/orthography.png')
+
+    plt.figure(figsize=(15,8))
+    plt.plot(o2s[:,1],label='Full')
+
+    o2p2s = np.array(np.load(f'metrics/{ID}/eval_o2p2s_acc.npy'))
+    o2s_only = np.array(np.load(f'metrics/{ID}/eval_o2s_only_acc.npy')) 
+
+    plt.plot(o2p2s[:,1],label='O->P->S')
+    plt.plot(o2s_only[:,1],label='O->S')
+
+    plt.xlabel('Iteration')
+    plt.ylabel('Accuracy')
+    plt.legend(title='Variants')
+
+    plt.savefig(f'figures/{ID}/semantic_evolution.png')
     plt.close('all')
 
 def plot_taraban(results : np.array ,filename : str):
@@ -140,7 +155,7 @@ def eval_taraban(ckpts : List[str], model : TriangleModel,trainer : Trainer):
         
     device = trainer.device
     ### Iterate over checkpoints
-    for ckpt in tqdm.tqdm(ckpts,position=0):
+    for ckpt in tqdm.tqdm(ckpts[-1::],position=0):
        model.load_state_dict(torch.load(ckpt,map_location=device))
        model.eval()
         
@@ -236,7 +251,7 @@ def eval_strain(ckpts : List[str], model : TriangleModel, trainer : Trainer):
     device = trainer.device
 
     ### Iterate over checkpoints
-    for ckpt in tqdm.tqdm(ckpts,position=0):
+    for ckpt in tqdm.tqdm(ckpts[-1::],position=0):
        model.load_state_dict(torch.load(ckpt,map_location=device))
        model.eval()
         
@@ -304,7 +319,7 @@ def eval_glushko(ckpts : List[str], model : TriangleModel, trainer : Trainer):
     device = trainer.device
 
     global orthography_tokenizer,phonology_tokenizer
-    for ckpt in tqdm.tqdm(ckpts,position=0):
+    for ckpt in tqdm.tqdm(ckpts[-1::],position=0):
        model.load_state_dict(torch.load(ckpt))
        model.eval()
         
@@ -371,9 +386,9 @@ def eval_development(ckpts : List[str], model : TriangleModel, trainer : Trainer
     device = trainer.device
 
     global dataset
-    for ckpt in tqdm.tqdm(ckpts,position=0):
+    for ckpt in tqdm.tqdm(ckpts[-1::],position=0):
        model.load_state_dict(torch.load(ckpt))
-       model.lesions = lesions
+       model.set_lesions(lesions)
        model.eval()
         
        ID = ckpt.split('/')[1]
@@ -471,7 +486,7 @@ def eval_brysbaert(ckpts : List[str], model : TriangleModel, trainer : Trainer):
     device = trainer.device
 
     ### Iterate over checkpoints
-    for ckpt in tqdm.tqdm(ckpts,position=0):
+    for ckpt in tqdm.tqdm(ckpts[-1::],position=0):
        model.load_state_dict(torch.load(ckpt,map_location=device))
        model.eval()
         
@@ -483,7 +498,7 @@ def eval_brysbaert(ckpts : List[str], model : TriangleModel, trainer : Trainer):
            for start_step in range(2,12):
                results = []
                for idx,word in tqdm.tqdm(enumerate(words),position=0):
-#                   print(idx)
+#                   #print(idx)
                    orthography_tensor = orthography_tokenizer(words[word][0])[None].to(device)
                    phonology_tensor = phonology_tokenizer(words[word][1])[None].to(device)
                    
@@ -492,7 +507,7 @@ def eval_brysbaert(ckpts : List[str], model : TriangleModel, trainer : Trainer):
                    results.append([words[word][2],words[word][3],sse])
                     
                results = np.array(results)
-               print(results.shape)
+               #print(results.shape)
                plot_brysbaert(results,f'figures/{ID}/brysbaert/{step}/{start_step}')
         
 if __name__=='__main__':
@@ -540,6 +555,7 @@ if __name__=='__main__':
    plot_performance(args.ID)
     
    ckpts = glob.glob(f'ckpts/{args.ID}/phase_2/*')
+   ckpts.sort(key = lambda string: int(string.split('/')[-1].replace('.pth','')))
 
    print("Plotting Concreteness...")
    eval_brysbaert(ckpts,model,trainer)
