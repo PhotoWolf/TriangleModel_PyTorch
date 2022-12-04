@@ -247,7 +247,7 @@ class TriangleModel(torch.nn.Module):
            p2p_lesion = 0
 
         ### Compute gradient of phonology
-        phon_gradient = self.phon_gradient([cleanup_phon,sem_2_phon,orth_2_phon,orthography],phonology
+        phon_gradient = self.phon_gradient([cleanup_phon,sem_2_phon,orth_2_phon,orthography],phonology,
                                                           [p2p_lesion,s2p_lesion,o2p_lesion,o2p_lesion])
         ### Compute gradient of semantics
         sem_gradient = self.sem_gradient([s2s_lesion,phon_2_semorth_2_sem,orthography],semantics,
