@@ -434,7 +434,7 @@ class Trainer:
                                             for a set of words
             opt (torch.optim.Optimizer) : optimizer for gradient descent
         '''
-        model.lesions = ['o2s','o2p','p2s','s2p','s2s']
+        model.set_lesions(['o2s','o2p','p2s','s2p','s2s'])
 
         start_error = -4
         t_0 = 2 + 2/3
@@ -451,7 +451,7 @@ class Trainer:
 
         phon_loss,sem_loss,phon_acc,sem_acc = self.step(model,inputs,opt=opt,targets=targets,
                                                           start_error = start_error, t_0 = t_0)
-        model.lesions = []
+        model.set_lesions()
         return phon_loss,phon_acc
 
     def train_s2s(self,model : TriangleModel, opt : torch.optim.Optimizer,
@@ -465,7 +465,7 @@ class Trainer:
                                             for a set of words
             opt (torch.optim.Optimizer) : optimizer for gradient descent
         '''
-        model.lesions = ['o2s','o2p','p2s','s2p','p2p']
+        model.set_lesions(['o2s','o2p','p2s','s2p','p2p'])
 
         start_error = -4
         t_0 = 2 + 2/3
@@ -482,7 +482,7 @@ class Trainer:
 
         phon_loss,sem_loss,phon_acc,sem_acc =  self.step(model,inputs,opt=opt,targets=targets,
                                                           start_error = start_error, t_0 = t_0)
-        model.lesions = []
+        model.set_lesions()
         return sem_loss,sem_acc
 
     def train_s2p(self,model : TriangleModel, opt : torch.optim.Optimizer,
@@ -497,7 +497,7 @@ class Trainer:
             opt (torch.optim.Optimizer) : optimizer for gradient descent
         '''
         
-        model.lesions = ['o2s','o2p','p2s','s2s']
+        model.set_lesions(['o2s','o2p','p2s','s2s'])
 
         start_error = -3
         t_0 = 0
@@ -509,7 +509,7 @@ class Trainer:
                   }
         loss,_,acc,_ =  self.step(model,inputs,opt=opt,targets=targets,
                                    start_error = start_error, t_0 = t_0)
-        model.lesions = []
+        model.set_lesions()
         return loss,acc
 
     def train_p2s(self,model : TriangleModel, opt : torch.optim.Optimizer,
@@ -523,7 +523,7 @@ class Trainer:
                                             for a set of words
             opt (torch.optim.Optimizer) : optimizer for gradient descent
         '''
-        model.lesions = ['o2s','o2p','s2p','p2p']
+        model.set_lesions(['o2s','o2p','s2p','p2p'])
 
         start_error = -3
         t_0 = 0
@@ -535,13 +535,14 @@ class Trainer:
                   }
         _,loss,_,acc = self.step(model,inputs,opt=opt,targets=targets,
                                    start_error = start_error, t_0 = t_0)
-        model.lesions = []
+        model.set_lesions()
         return loss,acc
 
     def train_full(self,model : TriangleModel, opt : torch.optim.Optimizer,
-                data : Dict[str,torch.Tensor]) -> Tuple[Tuple[float],Tuple[List[float]]]:
+                data : Dict[str,torch.Tensor], lesions = []) -> Tuple[Tuple[float],Tuple[List[float]]]:
         '''
-        Run + update the "full" (i.e: no lesions, w/ orthography) Triangle Model.
+        Run + update the "full" (i.e: w/ orthography, no lesions 
+        by default) Triangle Model.
         
         Args:
             model (TriangleModel)
@@ -550,7 +551,7 @@ class Trainer:
             opt (torch.optim.Optimizer) : optimizer for gradient descent
         '''
         
-        model.lesions = []
+        model.set_lesions(lesions)
         start_error = 2
         t_0 = 0
 
@@ -562,4 +563,5 @@ class Trainer:
         phon_loss,sem_loss,phon_acc,sem_acc = self.step(model,inputs,opt=opt,targets=targets,
                                                           start_error = start_error, t_0 = t_0)
 
+        model.set_lesions()
         return (phon_loss,sem_loss),(phon_acc,sem_acc)
