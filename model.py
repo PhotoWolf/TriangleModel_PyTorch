@@ -34,6 +34,7 @@ class TimeAveragedInputs(torch.nn.Module):
             gradient; dimensionality [out_features]
        '''
        assert len(lesions) == len(X)
+       #print(lesions,sum(lesions),len(lesions))
        if sum(lesions) == len(lesions):
           return 0
       
@@ -159,7 +160,7 @@ class TriangleModel(torch.nn.Module):
                                    and 'o2p'.
 
         '''
-        self.lesions = lesions
+        self.set_lesions(lesions)
 
         self.orth_dim,self.phon_dim,self.sem_dim = orth_dim,phon_dim,sem_dim
         self.phon_cleanup_dim,self.sem_cleanup_dim = phon_cleanup_dim,sem_cleanup_dim
@@ -186,6 +187,36 @@ class TriangleModel(torch.nn.Module):
         self.o2p_gradient = operator([orth_dim],orth_2_phon_dim,learn_bias)
         self.o2s_gradient = operator([orth_dim],orth_2_sem_dim,learn_bias)
 
+    def set_lesions(self,lesions = []):
+        if 'o2p' in lesions:
+           self.o2p_lesion = 1
+        else:
+           self.o2p_lesion = 0
+
+        if 'o2s' in lesions:
+           self.o2s_lesion = 1
+        else:
+           self.o2s_lesion = 0
+
+        if 'p2s' in lesions:
+           self.p2s_lesion = 1
+        else:
+           self.p2s_lesion = 0
+
+        if 's2p' in lesions:
+           self.s2p_lesion = 1
+        else:
+           self.s2p_lesion = 0
+
+        if 's2s' in lesions:
+           self.s2s_lesion = 1
+        else:
+           self.s2s_lesion = 0
+
+        if 'p2p' in lesions:
+           self.p2p_lesion = 1
+        else:
+           self.p2p_lesion = 0
 
     def forward(self,inputs : Dict[str,torch.Tensor]) -> Dict[str,torch.Tensor]:
         '''
@@ -216,35 +247,14 @@ class TriangleModel(torch.nn.Module):
         orth_2_phon = inputs['orth_2_phon']
 
         ### Get lesions
-        if 'o2p' in self.lesions:
-           o2p_lesion = 1
-        else:
-           o2p_lesion = 0
-
-        if 'o2s' in self.lesions:
-           o2s_lesion = 1
-        else:
-           o2s_lesion = 0
-
-        if 'p2s' in self.lesions:
-           p2s_lesion = 1
-        else:
-           p2s_lesion = 0
-
-        if 's2p' in self.lesions:
-           s2p_lesion = 1
-        else:
-           s2p_lesion = 0
-
-        if 's2s' in self.lesions:
-           s2s_lesion = 1
-        else:
-           s2s_lesion = 0
-
-        if 'p2p' in self.lesions:
-           p2p_lesion = 1
-        else:
-           p2p_lesion = 0
+        p2p_lesion = self.p2p_lesion
+        s2s_lesion = self.s2s_lesion
+        
+        s2p_lesion = self.s2p_lesion
+        p2s_lesion = self.p2s_lesion
+        
+        o2p_lesion = self.o2p_lesion
+        o2s_lesion = self.o2s_lesion
 
         ### Compute gradient of phonology
         phon_gradient = self.phon_gradient([cleanup_phon,sem_2_phon,orth_2_phon,orthography],phonology,
