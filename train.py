@@ -1,15 +1,16 @@
 import torch
 import json
+import os
 import pandas as pd
 import numpy as np
 import tqdm.auto as tqdm
-from model import TriangleModel
+from model import TriangleModel,clipped_sigmoid
 
 from typing import List,Optional,Dict,Tuple,Callable,Union
 
-### Clamp value for output
-BOUND = 15
+BOUND = int(os.environ.get('BOUND',15))
 
+### Clamp value for output
 def invert_binary(tensor : torch.Tensor) -> torch.Tensor:
     '''
     Replace values of a binary tensor w/ +- BOUND
@@ -26,7 +27,7 @@ def invert_binary(tensor : torch.Tensor) -> torch.Tensor:
     return new_tensor
 
 def forward_euler(f : torch.nn.Module, x_0 : Dict[str,torch.Tensor],
-                  t_0 : float, T : float, delta_t : float) -> Dict[str,torch.Tensor]:
+                  t_0 : float, T : float, delta_t : float, detach = False) -> Dict[str,torch.Tensor]:
     '''
     Implementation of Forward Euler solver.
     
@@ -47,13 +48,15 @@ def forward_euler(f : torch.nn.Module, x_0 : Dict[str,torch.Tensor],
     '''
     outputs,x = [x_0],x_0
     for t in torch.arange(0,T,delta_t):
-        derivatives = f(x)
+        derivatives = f(x,detach=detach)
         nx = {}
         for key in x:
             if t<t_0 and key in ['phonology','semantics']:
-               nx[key] = x[key]
-            nx[key] = x[key] + delta_t * derivatives[key]
-            nx[key] = torch.clamp(nx[key],-BOUND,BOUND)
+               nx[key] = x_0[key]
+               continue;
+            else:
+               nx[key] = x[key] + delta_t * derivatives[key]
+               nx[key] = torch.clamp(nx[key],-BOUND,BOUND)
         outputs.append(nx)
         x = nx
     return outputs
@@ -111,7 +114,6 @@ class Metrics:
         vals = (target_distances.argmin(dim=-1,keepdim=True) == pred_distances.argsort(dim=-1)[:,:,:k]).any(dim=-1)
         return vals.all(dim=-1).float().mean().item()
 
-
     def compute_sem_accuracy(self,preds : torch.Tensor, targets : torch.Tensor,
                              tau : float) -> float:
         '''
@@ -124,7 +126,8 @@ class Metrics:
         Return:
             Accuracy
         '''
-        return ((preds>=tau) == targets.bool()).all(dim=-1).float().mean().item()
+        acc = ((preds>=tau) == targets.bool()).all(dim=-1).float()
+        return acc.mean().item()
 
     def __call__(self,preds : Dict[str,torch.Tensor], targets : Dict[str,torch.Tensor]) -> Tuple[List[float]]:
         '''
@@ -143,8 +146,10 @@ class Metrics:
         semantics_preds = preds['semantics']
         semantics_targets = targets['semantics']
 
-        phon_accuracy = [self.compute_phon_accuracy(phonology_preds,phonology_targets,k) for k in self.k]
-        sem_accuracy = [self.compute_sem_accuracy(semantics_preds,semantics_targets,tau) for tau  in self.tau]
+        phon_accuracy = [[self.compute_phon_accuracy(phonology_pred,phonology_targets,k) 
+                            for k in self.k] for phonology_pred in phonology_preds]
+        sem_accuracy = [[self.compute_sem_accuracy(semantics_pred,semantics_targets,tau)
+                            for tau  in self.tau] for semantics_pred in semantics_preds]
         return phon_accuracy,sem_accuracy
 
 class TrainerConfig:
@@ -266,8 +271,8 @@ class Trainer:
            Phonology and semantics (all timesteps) normalized via a logistic sigmoid. 
        '''
        for idx,output in enumerate(outputs):
-           S = torch.sigmoid(output['semantics'])[None]
-           P = torch.sigmoid(output['phonology'])[None]
+           S = clipped_sigmoid(output['semantics'],BOUND)[None]
+           P = clipped_sigmoid(output['phonology'],BOUND)[None]
 
            if idx == 0:
               semantics = S
@@ -369,11 +374,13 @@ class Trainer:
         t_0 = kwargs.get('t_0',0)
         T = kwargs.get('T',4)
 
+        detach = kwargs.get('detach',False)
+
         ### Define initial conditions
         inputs = self.create_inputs(model,inputs)
         
         ### Call solver
-        outputs = self.solver(model,inputs,t_0,T,delta_t)
+        outputs = self.solver(model,inputs,t_0,T,delta_t,detach)
         
         ### Extract outputs
         predicted_phonology,predicted_semantics = self.collate_outputs(outputs)
@@ -392,7 +399,8 @@ class Trainer:
  
             ### Compute accuracies for the final timestep
             p_acc,s_acc = self.metrics(
-                          {'phonology':predicted_phonology[-1],'semantics':predicted_semantics[-1]},
+                          {'phonology':predicted_phonology[start_error::],
+                           'semantics':predicted_semantics[start_error::]},
                           targets)
 
             if opt is None:
@@ -408,20 +416,20 @@ class Trainer:
                ### Set timestep weighting.
                ### TODO: allow user to change weighting; must be monotonic
                weighting = torch.arange(1,phonology_loss.shape[0]+1,device=self.device)
-               weighting = weighting/weighting[-1]
+               weighting = torch.clamp(weighting/weighting[-1],.5,1)
 
-               phonology_loss = (weighting * phonology_loss).sum()
-               semantics_loss = (weighting * semantics_loss).sum()
+               summed_phonology_loss = (weighting * phonology_loss).sum()
+               summed_semantics_loss = (weighting * semantics_loss).sum()
 
                ### BPTT
-               loss = phonology_loss + semantics_loss
+               loss = summed_phonology_loss + summed_semantics_loss
                loss.backward()
 
                ### Update parameters
                opt.step()
                opt.zero_grad()
 
-               return phonology_loss.item(),semantics_loss.item(),p_acc,s_acc
+               return phonology_loss.tolist(),semantics_loss.tolist(),p_acc,s_acc
         
     def train_p2p(self,model : TriangleModel, opt : torch.optim.Optimizer,
                 data : Dict[str,torch.Tensor]) -> Tuple[float,List[float]]:
@@ -539,7 +547,8 @@ class Trainer:
         return loss,acc
 
     def train_full(self,model : TriangleModel, opt : torch.optim.Optimizer,
-                data : Dict[str,torch.Tensor], lesions = []) -> Tuple[Tuple[float],Tuple[List[float]]]:
+                data : Dict[str,torch.Tensor], lesions = [],
+                detach : Optional[bool] = False) -> Tuple[Tuple[float],Tuple[List[float]]]:
         '''
         Run + update the "full" (i.e: w/ orthography, no lesions 
         by default) Triangle Model.
@@ -552,7 +561,7 @@ class Trainer:
         '''
         
         model.set_lesions(lesions)
-        start_error = 2
+        start_error = 1
         t_0 = 0
 
         inputs = {'orthography':data['orthography'].to(self.device)}
@@ -561,7 +570,8 @@ class Trainer:
                     'semantics':data['semantics'].to(self.device),
                   }
         phon_loss,sem_loss,phon_acc,sem_acc = self.step(model,inputs,opt=opt,targets=targets,
-                                                          start_error = start_error, t_0 = t_0)
+                                                          start_error = start_error, 
+                                                          t_0 = t_0,detach=detach)
 
         model.set_lesions()
         return (phon_loss,sem_loss),(phon_acc,sem_acc)
