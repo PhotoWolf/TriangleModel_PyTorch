@@ -111,9 +111,12 @@ class Monosyllabic_Dataset(torch.utils.data.Dataset):
 
     def __len__(self) -> int:
         return len(self.orthography)
-
-    def __getitem__(self,idx :int) -> Dict[str,torch.Tensor]:
+    
+    def __getitem__(self,idx : Union[int,str]) -> Dict[str,torch.Tensor]:
         
+        if isinstance(idx,str):
+           idx = self.orthography.index[self.orthography.apply(lambda x: x.replace('_','')) == idx][0]
+            
         ### If [self.sample], sample from word corpus.
         if self.sample:
            idx = np.random.choice(np.arange(self.__len__()),p=self.frequencies)
