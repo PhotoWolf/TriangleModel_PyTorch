@@ -1,7 +1,16 @@
 import torch
 import json
+import os
 from typing import Optional,List,Dict
 from dataclasses import dataclass
+
+BOUND = int(os.environ.get('BOUND','15'))
+
+def clipped_sigmoid(X,bound):
+    nX = torch.sigmoid(X)
+    nX = nX - (X<=-bound).float() * nX \
+            + (X>=bound).float() * (1 - nX)
+    return nX
 
 class TimeAveragedInputs(torch.nn.Module):
    def __init__(self,in_features_list : List[int], out_features : int,bias : Optional[bool] = False):
@@ -19,6 +28,8 @@ class TimeAveragedInputs(torch.nn.Module):
        self.weights = torch.nn.ModuleList(
                           [torch.nn.Linear(in_features,out_features,bias=bias) for in_features in in_features_list]   
                           )
+       for weight in self.weights:
+           torch.nn.init.uniform_(weight.weight,-.1,.1)
 
    def forward(self, X : List[torch.Tensor], Y : torch.Tensor, lesions : List[int]) -> torch.Tensor:
        '''
@@ -34,14 +45,13 @@ class TimeAveragedInputs(torch.nn.Module):
             gradient; dimensionality [out_features]
        '''
        assert len(lesions) == len(X)
-       #print(lesions,sum(lesions),len(lesions))
        if sum(lesions) == len(lesions):
           return 0
       
        nX = 0
        for idx,input_vector in enumerate(X):
            if lesions[idx] != 1:
-               nX = nX + self.weights[idx](torch.sigmoid(input_vector))
+               nX = nX + self.weights[idx](clipped_sigmoid(input_vector,BOUND))
        return nX - Y
 
 
@@ -114,11 +124,15 @@ class ModelConfig:
           Return:
               TriangleModel 
         '''
+        if self.learn_bias == "False":
+           bias = False
+        else: bias = True
+        print(self.learn_bias,bias)
         return TriangleModel(self.orth_dim,self.phon_dim,self.sem_dim,
                                 self.phon_cleanup_dim,self.sem_cleanup_dim,
                                 self.phon_2_sem_dim,self.sem_2_phon_dim,
                                 self.orth_2_sem_dim,self.orth_2_phon_dim,
-                                bool(self.learn_bias),operator,lesions)
+                                bias,operator,lesions)
 
 class TriangleModel(torch.nn.Module):
     def __init__(self, orth_dim : int, phon_dim : int, sem_dim : int,
@@ -218,7 +232,7 @@ class TriangleModel(torch.nn.Module):
         else:
            self.p2p_lesion = 0
 
-    def forward(self,inputs : Dict[str,torch.Tensor]) -> Dict[str,torch.Tensor]:
+    def forward(self,inputs : Dict[str,torch.Tensor],**kwargs) -> Dict[str,torch.Tensor]:
         '''
            Compute gradients of all states / hidden units w.r.t to time.
            
@@ -229,6 +243,8 @@ class TriangleModel(torch.nn.Module):
               Gradients of all states / hidden units
         '''
         
+        detach = kwargs.get('detach',False)
+
         ### Get states
         orthography = inputs['orthography']
         phonology = inputs['phonology']
@@ -238,9 +254,17 @@ class TriangleModel(torch.nn.Module):
         cleanup_phon = inputs['cleanup_phon']
         cleanup_sem = inputs['cleanup_sem']
 
+        if detach:
+           cleanup_phon = cleanup_phon.detach()
+           cleanup_sem = cleanup_sem.detach()
+
         ### Get oral hidden units
         phon_2_sem = inputs['phon_2_sem']
         sem_2_phon = inputs['sem_2_phon']
+
+        if detach:
+           sem_2_phon = sem_2_phon.detach()
+           phon_2_sem = phon_2_sem.detach()
 
         ### Get reading hidden units
         orth_2_sem = inputs['orth_2_sem']
